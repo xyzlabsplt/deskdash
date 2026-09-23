@@ -185,7 +185,8 @@ enum LocalDay {
 
 /// Reads token counts out of the agents' own logs on this Mac:
 ///  - Claude Code's transcripts, `<projects>/<project>/<session>.jsonl`, and its subagents' beside them in
-///    `<session>/subagents/`. Each assistant line carries the API's `usage`. A reply with several blocks is written as
+///    `<session>/subagents/`, a workflow's agents one level further down (`workflows/wf_<id>/`). Each assistant line
+///    carries the API's `usage`. A reply with several blocks is written as
 ///    several lines with the same message id and usage, and a resumed or forked session copies earlier lines into its
 ///    new file, so a message counts once, by id.
 ///  - Codex's rollouts, `<codex>/sessions/YYYY/MM/DD/rollout-*.jsonl` and `<codex>/archived_sessions/`. Each response
@@ -223,8 +224,7 @@ actor TokenScanner {
     private let reach: Int
     private var places: [String: Place] = [:]
     private var walkedAt: Int?  // the last thorough pass
-    private var listed: [String: Int] = [:]  // folders' modification times when last listed, in ns
-    private var projects: [String] = []  // Claude Code's project folders
+    private var listed: [String: (stamp: Int, folders: [String])] = [:]  // each folder when last listed: its time, in ns
     private var seen = Set<Int>()  // Claude message ids and Codex response ids counted, hashed
     private var counted: [Int: DayTokens] = [:]  // what the logs on disk hold, by day
     private var history: [Int: DayTokens]?  // the history file, and what has been added to it since
@@ -304,32 +304,32 @@ actor TokenScanner {
             }
             out.append(Transcript(path: path, key: key, agent: agent, size: file.size, modified: file.modified))
         }
-        /// The logs in a folder that changed: every one on a thorough pass, the new ones on a quick pass.
-        func scan(_ dir: String, _ agent: Agent, where wanted: (String) -> Bool) -> [Entry] {
-            guard let found = list(dir, always: thorough) else { return [] }
-            for entry in found where !entry.isDirectory && wanted(entry.name) {
+        /// The logs in a folder that changed, every one on a thorough pass and the new ones on a quick pass, and
+        /// its subfolders.
+        func scan(_ dir: String, _ agent: Agent, where wanted: (String) -> Bool) -> [String] {
+            let (files, folders) = list(dir, always: thorough)
+            for entry in files ?? [] where wanted(entry.name) {
                 let path = dir + "/" + entry.name
                 let key = agent == .codex ? entry.name : path
                 if thorough || places[key] == nil { add(path, key, agent, entry) }
             }
-            return found
+            return folders
         }
         let jsonl = { (name: String) in name.hasSuffix(".jsonl") }
+        /// A session's subagents, and a workflow's agents in `workflows/wf_<id>/`: a quick pass lists only the folders
+        /// that changed, but looks into each of them.
+        func subagents(_ dir: String, depth: Int = 3) {
+            for folder in scan(dir, .claude, where: jsonl) where depth > 0 { subagents(dir + "/" + folder, depth: depth - 1) }
+        }
         if let claude {
-            if let found = list(claude, always: thorough) {
-                projects = found.filter(\.isDirectory).map { claude + "/" + $0.name }
-            }
-            for dir in projects {
-                for entry in scan(dir, .claude, where: jsonl) where entry.isDirectory && thorough {
-                    _ = scan(dir + "/" + entry.name + "/subagents", .claude, where: jsonl)  // a session's subagents
-                }
+            for project in list(claude, always: thorough).folders {
+                let dir = claude + "/" + project
+                for session in scan(dir, .claude, where: jsonl) where thorough { subagents(dir + "/" + session + "/subagents") }
             }
             if !thorough {
                 for (key, place) in places where place.agent == .claude && place.modified >= recent {
                     add(place.path, key, .claude)
-                    if !key.contains("/subagents/") {
-                        _ = scan(String(key.dropLast(6)) + "/subagents", .claude, where: jsonl)
-                    }
+                    if !key.contains("/subagents/") { subagents(String(key.dropLast(6)) + "/subagents") }
                 }
             }
         }
@@ -337,9 +337,7 @@ actor TokenScanner {
             let rollout = { (name: String) in name.hasPrefix("rollout-") && name.hasSuffix(".jsonl") }
             if thorough {
                 func walk(_ dir: String, depth: Int) {
-                    for entry in scan(dir, .codex, where: rollout) where entry.isDirectory && depth > 0 {
-                        walk(dir + "/" + entry.name, depth: depth - 1)
-                    }
+                    for folder in scan(dir, .codex, where: rollout) where depth > 0 { walk(dir + "/" + folder, depth: depth - 1) }
                 }
                 walk(codex + "/sessions", depth: 3)
                 walk(codex + "/archived_sessions", depth: 0)
@@ -359,14 +357,20 @@ actor TokenScanner {
         return (out, keys)
     }
 
-    /// A folder's entries if it has changed since it was last listed (a file added, removed or renamed), or `always`.
-    private func list(_ path: String, always: Bool) -> [Entry]? {
+    /// A folder's files if it has changed since it was last listed (a file added, removed or renamed), or `always`, and
+    /// its subfolders either way: from the last listing when it has not changed.
+    private func list(_ path: String, always: Bool) -> (files: [Entry]?, folders: [String]) {
         var info = stat()
-        guard stat(path, &info) == 0 else { return always ? [] : nil }
+        guard stat(path, &info) == 0 else {
+            listed[path] = nil
+            return (always ? [] : nil, [])
+        }
         let stamp = Int(info.st_mtimespec.tv_sec) &* 1_000_000_000 &+ info.st_mtimespec.tv_nsec
-        guard always || listed[path] != stamp else { return nil }
-        listed[path] = stamp
-        return Self.entries(path)
+        if !always, let known = listed[path], known.stamp == stamp { return (nil, known.folders) }
+        let entries = Self.entries(path)
+        let folders = entries.filter(\.isDirectory).map(\.name)
+        listed[path] = (stamp, folders)
+        return (entries.filter { !$0.isDirectory }, folders)
     }
 
     private struct Entry {

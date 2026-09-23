@@ -113,7 +113,7 @@ Sessions whose process is gone are dropped, even without a `SessionEnd`.
 
 deskdash reads the logs the agents already keep, and only the token counts in them. There is nothing to set up, and nothing leaves this Mac.
 
-- **Claude Code** writes each session to `~/.claude/projects/<project>/<session>.jsonl`, and its subagents' beside it. Every reply there carries the API's token counts. A reply in several parts is written as several lines with the same counts, and a resumed or forked session copies earlier replies into its new file, so each reply counts once, by its message id.
+- **Claude Code** writes each session to `~/.claude/projects/<project>/<session>.jsonl`, and its subagents' in a folder beside it, a workflow's agents included. Every reply there carries the API's token counts. A reply in several parts is written as several lines with the same counts, and a resumed or forked session copies earlier replies into its new file, so each reply counts once, by its message id.
 - **Codex** writes each session to `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`archived_sessions/` once archived), with a `token_usage_record` per response, counted once by its id. Older versions wrote only the session's running total (`token_count`), which deskdash counts by its differences.
 - **What counts**: new input, cache reads, and output, reasoning included, as Claude's and OpenAI's own totals do. Cache reads are the conversation so far, read again on every turn, so they are most of it: 98% of a busy day of Claude Code. `deskdash tokens` prints each kind, day by day.
 - **Days** are this Mac's calendar days.
