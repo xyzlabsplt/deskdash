@@ -1,0 +1,63 @@
+// deskdash settings. Copy to config.json (gitignored) and edit; the running dashboard picks up changes
+// within 2 seconds. JSON5: comments and trailing commas are fine. Every key is optional, and anything
+// left out uses the default shown here.
+{
+  "display": {
+    "match": "Wokyis",              // part of the screen's name in System Settings > Displays; only it is covered
+  },
+  "pages": {
+    "order": ["clock", "music", "climate", "markets", "agents"],  // music, climate, agents only rotate in when they have data
+    "seconds": 12,                  // how long each page stays up
+    "durations": { "clock": 15 },   // per-page overrides
+  },
+  "clock": {
+    "use24h": true,
+    "timeZone": "",                 // an IANA zone like "Europe/London"; "" follows this Mac
+  },
+  "weather": {                      // set from Settings → Weather & Time, which searches by city
+    "enabled": true,
+    "place": "",                    // e.g. "Lisbon, Portugal"; until a place is set there is no weather
+    "latitude": null,               // e.g. 38.717
+    "longitude": null,              // e.g. -9.133
+    "timeZone": "",                 // the place's own zone, e.g. "Europe/Lisbon", so the clock can follow it
+    "fahrenheit": false,
+  },
+  "markets": {
+    "symbols": ["BTC", "ETH", "SOL"],  // Hyperliquid perp names (BTC, ETH, SOL, HYPE, kPEPE, ...)
+    "perPage": 3,                   // 1 to 5, sized to fill the page; more symbols make more pages
+  },
+  "agents": {
+    "claude": true,                 // read Claude Code's own session registry, ~/.claude/sessions
+    "stateDir": "~/.local/state/deskdash/agents",  // where hooks/agent-status.sh writes (Codex)
+    "doneMinutes": 15,              // a session that finished its turn shows DONE (green) this long, then IDLE
+    "maxIdleHours": 12,             // idle sessions older than this are hidden
+    "jumpOnWaiting": true,          // jump to the agents page when a session needs you
+    "jumpOnDone": true,             // ...and briefly when one finishes
+    "holdSeconds": 20,              // how long a jump holds the agents page
+  },
+  "dyson": {
+    "enabled": true,
+    "credentials": "secrets/dyson.json",  // written by Settings → Purifier or `deskdash dyson setup` (gitignored)
+    "host": "",                     // the purifier's IP or host[:port]; "" finds it by name on the network
+  },
+  "telegram": {
+    "channels": [],                 // public channels (t.me/<name>), e.g. ["telegram"]; new posts show full screen
+    "seconds": 5,                   // how long each post stays up
+    "pollSeconds": 20,              // how often to check for new posts (about 5 KB per check)
+  },
+  "stats": {
+    "enabled": true,                // CPU, memory, SSD and network meters along the bottom of the clock page
+  },
+  "music": {                        // what Music or Spotify plays on this Mac; the Now Playing page is "music" in pages.order
+    "onClock": true,                // a line on the clock page while something plays
+    "artwork": true,                // look up covers: Spotify's oEmbed, Apple's iTunes Search (public, no key)
+    "takeover": false,              // each new track takes the screen for takeoverSeconds, like a Telegram post
+    "takeoverSeconds": 5,
+  },
+  "schedule": {
+    "keepAwake": "08:00-23:00",     // hold the displays awake in this window ("" = never; macOS can't keep only one awake)
+    "dim": "23:00-08:00",           // the night: draw at dimBrightness in this window ("" = never)
+    "dimBrightness": 0.35,          // at night
+    "dayBrightness": 1,             // the rest of the day (0.05 to 1, drawn over the page, not the backlight)
+  },
+}

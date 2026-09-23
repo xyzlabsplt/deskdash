@@ -1,0 +1,168 @@
+# deskdash
+
+A glanceable dashboard for the 5" 1280×720 screen on the Wokyis M5, the dock that sits under a Mac mini. It is sized to be read from the chair: a 300 pt clock, 120 pt prices, and colors that carry the meaning even when the text is too far away to read.
+
+One native Swift binary, no dependencies, about 1 KB/s of network, nothing listening on a port. It covers only the screen whose name contains `Wokyis` (Settings can pick another), and hides if that screen goes away. Everything personal, like your city, tickers, channels and purifier, is set in its Settings window and stays on your Mac.
+
+| Clock | Now Playing | Climate | Markets | Agents |
+|---|---|---|---|---|
+| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) |
+
+## Pages
+
+The pages rotate every 12 s (the clock gets 15 s). Click the dashboard for the next page. Clicks do not take focus from the app you are working in.
+
+**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has six tabs:
+
+- **General**: which screen, which pages rotate and for how long, what the clock page shows (12/24-hour, system stats, the playing track), the Now Playing takeover and covers, the keep-awake schedule, and the brightness by day and at night.
+- **Weather & Time**: search for your city (Open-Meteo, no key). Until you choose one there is no weather. Optionally the clock follows that place's time zone, and the clock page then names the city.
+- **Markets**: add, reorder, or remove Hyperliquid symbols, each checked against Hyperliquid's list.
+- **Telegram**: add or remove public channels, each checked through its public preview, and preview a channel's newest post on the dock screen.
+- **Agents**: the alert behavior, and the command that installs the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
+
+Changes apply at once and are saved to `config.json`, writing only what differs from the defaults. `deskdash config` prints that.
+
+**It never hides your windows.** The dashboard covers the dock screen only while nothing else is on it. When any app's window lands there, the dashboard drops behind all windows within a second, like a desktop picture, and it covers the screen again once that screen is clear. The same happens whenever the dock screen is the main display (the one with the menu bar), because that is where macOS opens new windows and dialogs.
+
+- **Clock**: time, date, and the indoor temperature and humidity from a Dyson purifier (see [Climate](#climate-the-dyson-purifier)). Without one, outdoor readings for your city from [Open-Meteo](https://open-meteo.com) (no key, refreshed every 15 min). Along the bottom, this Mac's own load, in small versions of the Climate page's 10-segment bars:
+  - **CPU**: amber from 70%, red from 90%.
+  - **RAM**: colored by macOS's memory pressure (green normal, amber warning, red critical) rather than by how full it is, because macOS keeps memory full on purpose.
+  - **SSD**: space used, counting purgeable files as free the way Finder does. Amber from 80%, red from 90%.
+  - **Network**: download and upload rates over Ethernet and Wi-Fi.
+
+  While Music or Spotify plays, a line above them shows the cover, the title and artist, and a thin progress bar. With neither row showing, the time grows back to 360 pt.
+- **Now Playing**: the cover, large, beside the title, artist, album, and a progress bar. This page only rotates in while something plays (see [Now playing](#now-playing-music-and-spotify)).
+- **Climate**: the purifier's readings, laid out like Dyson's own display. Inside temperature and humidity sit beside their icons. Each pollutant (CO₂, PM2.5, PM10, VOC, NO₂, and formaldehyde on models that measure it) gets a 10-segment level bar: segments 1–3 are the good band (green), 4–6 fair (amber), and 7–10 poor (red), so height and color agree from across the room. The outdoor weather sits in the corner. This page only appears while the purifier is reporting.
+- **Markets**: Hyperliquid perps, three per page by default and up to five, sized to fill the screen: price, 24 h change, and a 24 h sparkline. With one or two on a page, the symbol and change sit above a larger price. Prices stream over Hyperliquid's WebSocket, about one 300-byte message per coin per second, and the screen redraws once a second. Prices dim if the feed goes quiet for a minute.
+- **Agents**: every live Claude Code and Codex session, with what needs you first:
+
+  | Color | State | Meaning |
+  |---|---|---|
+  | amber, blinking | **NEEDS YOU** | waiting on a permission prompt or a question |
+  | blue | **WORKING** | running |
+  | green | **DONE** | finished its turn in the last 15 min |
+  | gray | **IDLE** | open but quiet; hidden after 12 h |
+
+  This page only rotates in while some session is not idle. A thin bar per active session runs along the bottom of every other page, in the same colors.
+
+**Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents.
+
+**Night.** From 23:00 to 08:00 the dashboard draws at 35% brightness, and at 100% the rest of the day. Settings → General sets both levels. While you drag either slider, the dock screen shows that level, whatever the time, and returns to the schedule's shortly after. The dimming is drawn, as black over the page, because macOS has no public control for this panel's backlight. From 08:00 to 23:00 it keeps the displays from idle-sleeping. macOS can only keep all displays awake, not one, so turn **Keep the displays awake** off in Settings → General if the big monitor should sleep on its own schedule.
+
+## Climate: the Dyson purifier
+
+Dyson purifiers such as the Big+Quiet run a small MQTT server on the home network. deskdash finds the purifier by name over Bonjour (`<model>_<serial>`, so a new IP address does not matter), logs in with its local password, and asks for sensor data every 30 s. It only ever sends read requests, never settings. No Dyson cloud is involved at runtime.
+
+The local password has to be fetched once, in **Settings → Purifier**. It comes from one of two places:
+
+1. **The Wi-Fi sticker** on the purifier (also on the back of the manual): type the product Wi-Fi password printed there, and the Wi-Fi name as well if the purifier did not answer on the network. No Dyson account involved.
+2. **Your Dyson account**: your email, then the one-time code Dyson emails you and your account password. The password is used once for that login and is never saved.
+
+deskdash proves the password by reading the sensors once, then saves the device credential to `secrets/dyson.json`, which is gitignored and readable only by you, and connects. **Forget** deletes it again. The same setup runs in a terminal, with the typing hidden: `.build/release/deskdash dyson setup`. `deskdash dyson test` reads the sensors once at any time.
+
+- If the readings say the sensors are off, turn on **Continuous Monitoring** in the Dyson app, so the sensors report while the purifier itself is off.
+- Color bands: CO₂ under 800 ppm is green and over 1200 red. PM2.5 uses the US EPA breakpoints, 12 and 35 µg/m³. VOC and NO₂ use Dyson's 0–10 index: 0–3 good, 4–6 fair, 7+ poor. Formaldehyde uses WHO's 0.1 mg/m³.
+- The login protocol follows [libdyson-neon](https://github.com/libdyson-wg/libdyson-neon), the library behind the Home Assistant Dyson integration.
+
+## Telegram: channel alerts
+
+New posts in the public channels added under Settings → Telegram take over the screen for 5 s: the channel's name, the post time, and the text as large as it fits, inside a Telegram-blue frame. There is no Telegram page in the rotation otherwise. Posts arriving together queue, 5 s each, and a burst keeps only the newest four.
+
+```json5
+"telegram": { "channels": ["telegram"] }   // t.me/<name>; also "seconds" (5) and "pollSeconds" (20)
+```
+
+It reads Telegram's public preview of each channel (`t.me/s/<name>`), so no account, bot, or token is involved. Every 20 s it asks only for posts newer than the last one seen, about 5 KB per check. The first check after a start only notes the newest post, so a restart never replays old ones. `deskdash ctl telegram` shows the newest post now, as a preview. Private channels cannot be read this way: they would need deskdash signed in as your Telegram account.
+
+## Now playing: Music and Spotify
+
+Music and Spotify announce every play, pause, skip, and new track with a system-wide notification (`com.apple.Music.playerInfo` and `com.spotify.client.PlaybackStateChanged`). deskdash listens for those, so it needs no permission, no account, and no polling. It uses no AppleScript either, which would make macOS ask for Automation access.
+
+- It only sees players running on this Mac. To play Spotify on this Mac from your phone, use Spotify Connect: pick the Mac under devices, and its Spotify app plays and announces each track.
+- Nothing shows until the first announcement after deskdash starts. A track that was already playing appears at the next pause, play, or track change.
+- Neither player announces its playhead continuously, so the progress bar counts up from the last announcement. Spotify includes the position in each announcement. Music doesn't, so a Music track counts from its start, and dragging Music's playhead isn't seen.
+- **Covers.** For Spotify, deskdash asks Spotify's public oEmbed endpoint by track ID. For Music, it asks Apple's iTunes Search by artist and title. Both are public and need no key. It's one lookup per album, about 100 KB. It does tell Spotify or Apple which track is playing; `"music": { "artwork": false }` turns covers off and shows a music note instead.
+- `"music": { "takeover": true }` makes each new track take the screen for 5 s, the way a Telegram post does. It's off by default and also in Settings → General.
+- `deskdash music` prints what the players announce, as they announce it. It's the quickest check that deskdash hears them. `swift scripts/fake-track.swift spotify` posts a made-up announcement, so you can try it without music (see the script for more).
+
+## System stats
+
+The clock page reads this Mac's load from the kernel every 2 s, and the numbers redraw with the clock's once-a-second tick:
+
+- **CPU**: Mach's per-state tick counters.
+- **Memory**: active, wired, and compressed pages, against the installed RAM.
+- **Network**: the 64-bit byte counters of the `en*` interfaces. VPN tunnels are left out, because their traffic also crosses Ethernet or Wi-Fi.
+
+All of that costs well under a millisecond. The SSD's free space goes through macOS's purgeable-space service and takes 6 to 40 ms, so it's read once a minute, off the main thread. `"stats": { "enabled": false }` removes the row and stops the sampling.
+
+## How agent status works
+
+- **Claude Code**: no setup. Claude Code keeps a small registry file for each live session in `~/.claude/sessions/<pid>.json`, with `status` (`busy`, `idle`, `waiting`), what it is waiting for, and the session name. This covers sessions from the desktop app, from `claude` in a terminal or tmux, and `claude --bg`. deskdash only reads those `.json` files and never opens the `.key` files beside them. The format is Claude Code's own and undocumented. If an update changes it, `hooks/agent-status.sh claude` can be wired in through Claude Code's hooks instead.
+- **Codex**: through its lifecycle hooks. `hooks/agent-status.sh` writes one small file per session to `~/.local/state/deskdash/agents/` on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `Interrupt` and `SessionEnd`. It prints nothing and always exits 0, so it cannot block or change anything Codex does, and it costs about 10 ms per event. It needs `jq`, which ships with macOS 15 and later. To install it, from the checkout (Settings → Agents shows the full command, with a Copy button):
+
+  ```bash
+  scripts/install-codex-hooks.sh
+  ```
+
+  Then start `codex` and run `/hooks` to review and trust it. Codex will not run a new hook until you do. `--remove` takes it out again.
+
+Sessions whose process is gone are dropped, even without a `SessionEnd`.
+
+## Build and run
+
+It needs macOS 14 or later and the Command Line Tools (`xcode-select --install`); no Xcode, no Homebrew. From the checkout:
+
+```bash
+scripts/build.sh
+```
+
+This compiles the binary (`.build/release/deskdash`, fine for the commands below) and wraps it in `deskdash.app`, bundle ID `local.deskdash`, which is what the login service runs. The wrapper exists for macOS's Local Network permission, which the purifier connection needs. macOS tracks that permission for a bare binary by a build ID that changes on every compile, so each rebuild would silently block the purifier ("Local network prohibited"). An app bundle registered with LaunchServices keeps the permission across rebuilds. macOS asks once; answer Allow.
+
+To run it at login, as a LaunchAgent that launchd restarts if it exits:
+
+```bash
+scripts/install-service.sh                             # installs local.deskdash and starts it; --remove takes it out
+launchctl kickstart -k gui/$(id -u)/local.deskdash     # restarts it, after scripts/build.sh
+tail -f ~/Library/Logs/deskdash.log                    # its log
+```
+
+Right-click → Quit (or Quit in the menu bar) stops it until the next login; `scripts/install-service.sh` starts it again sooner. `--print` shows the LaunchAgent without installing it.
+
+Other ways to run it:
+
+```bash
+.build/release/deskdash --windowed             # a normal window on the big screen, for trying changes
+.build/release/deskdash snapshot --demo        # render each page to snapshots/*.png with sample data and exit
+.build/release/deskdash snapshot settings      # render each Settings tab to snapshots/settings-*.png
+.build/release/deskdash ctl next               # also: prev, pause, resume, reload, demo, page agents, capture FILE,
+                                               #       hide [MINUTES], show, quit
+.build/release/deskdash windows                # each display and whose windows are on it
+.build/release/deskdash music                  # what Music and Spotify announce, as they do; Control-C stops
+swift scripts/fake-track.swift spotify         # pretend Spotify started a track (also music; paused, stopped)
+```
+
+`ctl demo` toggles three sample sessions, one of them waiting, to preview the alerts on the real screen. `ctl capture out.png` saves what the live window is showing, without a screen-recording permission.
+
+## Configure
+
+Settings writes `config.json` in the checkout, but hand edits are fine too. Every key is optional, and `config.example.json` documents them all (`cp config.example.json config.json` starts from it). `config.json` and `secrets/` are gitignored, because they hold your city, tickers, channels, and the purifier's credential. The running dashboard reloads `config.json` within 2 s. If a change doesn't parse, the error shows in red at the top of the screen and the previous settings stay in force. When Settings saves, it rewrites the file without comments.
+
+## What leaves this Mac
+
+deskdash has no account of its own and no server. It only talks to:
+
+- **Open-Meteo**: your city's coordinates, every 15 min, and the name you search for in Settings.
+- **Hyperliquid**: your symbols, over one WebSocket.
+- **Telegram**: the names of the public channels you watch, every 20 s.
+- **Spotify or Apple**: the playing track, once per album, while covers are on.
+- **Dyson**: your account email, the emailed code, and your password, once, and only if you connect the purifier through your account. After that, deskdash talks to the purifier on your own network only.
+
+## Tips
+
+- Keep the big monitor as the main display (System Settings → Displays → Arrange, where the white menu bar sits).
+- Changing which display is main can make macOS move your whole desktop to the other screen. macOS files the main display's Spaces under a generic `Main` key and every other display's under its own ID, so when the main display changes, the Space holding your windows can end up on the dock screen. The dashboard stays behind those windows. To send one back, use Window → Move to (your monitor's name), or hover the window's green button. Unplugging the dock also sends every window to the big monitor.
+- Footprint, measured on a Mac mini: about 1.1% of one CPU core with the pages rotating, and 1.3% while a track plays, since its progress bar moves every second. The window server's share stays within its own swings. Memory is about 55 MB once the Settings window has been opened. Nothing animates continuously: the display redraws once a second, and alerts blink on that tick. A smooth pulse cost an extra 2 to 5% of a core for as long as it ran, whether SwiftUI or Core Animation drew it.
+
+## License
+
+[MIT](LICENSE). deskdash is not affiliated with Wokyis, Dyson, Hyperliquid, Telegram, Spotify, or Apple.
