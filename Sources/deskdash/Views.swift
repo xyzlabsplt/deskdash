@@ -36,6 +36,17 @@ enum Theme {
         }
     }
 
+    /// The token heatmap's five shades of green, as GitHub's: none, then dim to full.
+    static func heat(_ level: Int) -> Color {
+        switch level {
+        case ..<1: Color.white.opacity(0.08)
+        case 1: up.opacity(0.28)
+        case 2: up.opacity(0.48)
+        case 3: up.opacity(0.72)
+        default: up
+        }
+    }
+
     static func color(_ pressure: SystemStats.Pressure) -> Color {
         switch pressure {
         case .normal: up
@@ -118,6 +129,7 @@ struct PageView: View {
         case .climate: ClimatePage(dash: dash)
         case .markets(let i): MarketsPage(dash: dash, symbols: dash.symbols(onPage: i))
         case .agents: AgentsPage(sessions: dash.visibleSessions, now: dash.now, blinkOn: dash.blinkOn)
+        case .tokens: TokensPage(dash: dash)
         }
     }
 }
@@ -889,6 +901,152 @@ struct AttentionFrame: View {
     }
 }
 
+// MARK: tokens
+
+/// The tokens Claude Code and Codex used on this Mac: today's count large, with each agent's share under it; the last
+/// 7 and 30 days and the streak of days with any use beside it; and underneath, the last `tokens.weeks` weeks as a
+/// GitHub-style heatmap, a column per week, brighter green for busier days.
+struct TokensPage: View {
+    let dash: Dashboard
+
+    var body: some View {
+        let history = dash.tokens ?? TokenHistory()
+        let today = LocalDay.of(dash.now)
+        let weeks = dash.config.tokens.span
+        let day = history.on(today)
+        let shown = history.sum((today - weeks * 7)...today)  // an agent unused in all these weeks goes unnamed
+        let streak = history.streak(through: today)
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    TokenCaption(text: "TODAY")
+                    Text(Fmt.tokens(day.total))
+                        .font(Theme.font(150, .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(day.total > 0 ? Theme.text : Theme.faint)
+                        .padding(.top, -14)
+                        .padding(.bottom, -6)
+                    HStack(spacing: 40) {
+                        if shown.claude.total > 0 { TokenStat(label: "CLAUDE", count: day.claude.total, size: 46) }
+                        if shown.codex.total > 0 { TokenStat(label: "CODEX", count: day.codex.total, size: 46) }
+                    }
+                }
+                Spacer(minLength: 40)
+                VStack(alignment: .trailing, spacing: 2) {
+                    TokenStat(label: "7 DAYS", count: history.sum((today - 6)...today).total, size: 64)
+                    TokenStat(label: "30 DAYS", count: history.sum((today - 29)...today).total, size: 64)
+                    TokenStat(label: "STREAK", value: streak == 1 ? "1 day" : "\(streak) days", size: 64)
+                }
+            }
+            .lineLimit(1)
+            TokenHeatmap(history: history, today: today, weeks: weeks,
+                         firstWeekday: dash.weekStart ?? Calendar.current.firstWeekday)
+                .padding(.top, 16)
+        }
+        .padding(.horizontal, 56)
+        .padding(.top, 30)
+        .padding(.bottom, 62)  // clear of the agent bars along the bottom edge
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// A caption in the other pages' style ("OUTSIDE", "CPU").
+struct TokenCaption: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(Theme.font(28, .heavy))
+            .tracking(2)
+            .foregroundStyle(Theme.secondary)
+    }
+}
+
+/// A caption beside its number, faint while it is zero.
+struct TokenStat: View {
+    let label: String
+    let value: String
+    let size: CGFloat
+    var zero = false
+
+    init(label: String, value: String, size: CGFloat) {
+        self.label = label
+        self.value = value
+        self.size = size
+    }
+
+    init(label: String, count: Int, size: CGFloat) {
+        self.init(label: label, value: Fmt.tokens(count), size: size)
+        zero = count == 0
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            TokenCaption(text: label)
+            Text(value)
+                .font(Theme.font(size, .bold))
+                .monospacedDigit()
+                .foregroundStyle(zero ? Theme.faint : Theme.text)
+        }
+    }
+}
+
+/// A column per week, oldest on the left, each starting on the calendar's first weekday, and a month's name over the
+/// column where it begins. Days after today are left out, and today is outlined. The shades are GitHub's five: none,
+/// then the quarters of the days with any use, by rank, so one huge day does not leave every other in the dimmest.
+/// It fills the width, or else the height, centered; either way flush with the bottom.
+struct TokenHeatmap: View {
+    let history: TokenHistory
+    let today: Int
+    let weeks: Int
+    let firstWeekday: Int  // Calendar's: 1 is Sunday
+
+    private static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let first = today - (LocalDay.weekday(today) - (firstWeekday - 1) + 7) % 7 - (weeks - 1) * 7
+            let ranked = (first...today).map { history.on($0).total }.filter { $0 > 0 }.sorted()
+            func level(_ total: Int) -> Int {
+                guard total > 0, !ranked.isEmpty else { return 0 }
+                var (lo, hi) = (0, ranked.count)  // how many days used at most this much
+                while lo < hi {
+                    let mid = (lo + hi) / 2
+                    if ranked[mid] <= total { lo = mid + 1 } else { hi = mid }
+                }
+                return min(4, max(1, Int((4 * Double(lo) / Double(ranked.count)).rounded(.up))))
+            }
+
+            let labels: CGFloat = 42  // the month names' row
+            let gap: CGFloat = 0.18  // of a column's pitch
+            let pitch = min(size.width / (CGFloat(weeks) - gap), (size.height - labels) / (7 - gap))
+            let cell = pitch * (1 - gap)
+            let left = (size.width - pitch * (CGFloat(weeks) - gap)) / 2
+            let top = size.height - pitch * (7 - gap)
+
+            var starts = (0..<weeks).filter { $0 == 0 || LocalDay.civil(first + $0 * 7).month != LocalDay.civil(first + $0 * 7 - 7).month }
+            if starts.count > 1, starts[1] < 3 { starts.removeFirst() }  // no room for the first column's month
+            for week in starts {
+                let name = Self.months[LocalDay.civil(first + week * 7).month - 1]
+                ctx.draw(Text(name).font(Theme.font(26, .semibold)).foregroundStyle(Theme.secondary),
+                         at: CGPoint(x: left + CGFloat(week) * pitch, y: top - 10), anchor: .bottomLeading)
+            }
+            for week in 0..<weeks {
+                for row in 0..<7 {
+                    let day = first + week * 7 + row
+                    guard day <= today else { break }
+                    let rect = CGRect(x: left + CGFloat(week) * pitch, y: top + CGFloat(row) * pitch, width: cell, height: cell)
+                    let shape = RoundedRectangle(cornerRadius: cell * 0.2, style: .continuous).path(in: rect)
+                    ctx.fill(shape, with: .color(Theme.heat(level(history.on(day).total))))
+                    if day == today {
+                        ctx.stroke(shape.strokedPath(StrokeStyle(lineWidth: 3)), with: .color(Theme.text))
+                    }
+                }
+            }
+        }
+    }
+}
+
 // MARK: formatting
 
 @MainActor
@@ -968,6 +1126,19 @@ enum Fmt {
         case ..<999_500_000: return "\(Int((v / 1e6).rounded())) MB/s"
         default: return String(format: "%.1f GB/s", v / 1e9)
         }
+    }
+
+    /// A token count to three figures: 950 · 8.41K · 297K · 4.83M · 236M · 1.24B
+    static func tokens(_ count: Int) -> String {
+        var value = Double(max(0, count))
+        guard value >= 999.5 else { return "\(Int(value.rounded()))" }
+        let units = ["K", "M", "B", "T"]
+        var unit = -1
+        repeat {
+            value /= 1000
+            unit += 1
+        } while value >= 999.5 && unit < units.count - 1
+        return String(format: "%.\(value < 9.995 ? 2 : value < 99.95 ? 1 : 0)f", value) + units[unit]
     }
 
     /// A playhead or a track's length: 3:07, or 1:02:45 past an hour.

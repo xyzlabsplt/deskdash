@@ -9,6 +9,7 @@ struct Config: Codable, Equatable, Sendable {
     var weather = Weather()
     var markets = Markets()
     var agents = Agents()
+    var tokens = Tokens()
     var dyson = Dyson()
     var telegram = Telegram()
     var stats = Stats()
@@ -21,7 +22,7 @@ struct Config: Codable, Equatable, Sendable {
     }
 
     struct Pages: Codable, Equatable, Sendable {
-        var order = ["clock", "music", "climate", "markets", "agents"]  // music, climate and agents only when they have data
+        var order = ["clock", "music", "climate", "markets", "agents", "tokens"]  // all but clock and markets only when they have data
         var seconds = 12.0
         var durations: [String: Double] = ["clock": 15]
     }
@@ -70,6 +71,21 @@ struct Config: Codable, Equatable, Sendable {
         var jumpOnWaiting = true
         var jumpOnDone = true
         var holdSeconds = 20.0
+    }
+
+    struct Tokens: Codable, Equatable, Sendable {
+        /// Weeks of days in the heatmap, this one included.
+        var weeks = 26
+        /// Claude Code's transcripts (a folder per project) and Codex's home (its sessions/ and archived_sessions/).
+        /// Only the token counts in them are read. "" leaves one out.
+        var claude = "~/.claude/projects"
+        var codex = "~/.codex"
+        /// deskdash's own record of each day's totals: Claude Code deletes its transcripts after 30 days, and the
+        /// heatmap reaches back further. "" keeps none.
+        var history = "~/.local/state/deskdash/tokens.json"
+
+        /// `weeks` as the heatmap draws it: 4 to 53.
+        var span: Int { min(53, max(4, weeks)) }
     }
 
     struct Dyson: Codable, Equatable, Sendable {
@@ -127,6 +143,7 @@ extension Config {
         weather = try c.get(.weather, d.weather)
         markets = try c.get(.markets, d.markets)
         agents = try c.get(.agents, d.agents)
+        tokens = try c.get(.tokens, d.tokens)
         dyson = try c.get(.dyson, d.dyson)
         telegram = try c.get(.telegram, d.telegram)
         stats = try c.get(.stats, d.stats)
@@ -194,6 +211,17 @@ extension Config.Agents {
         jumpOnWaiting = try c.get(.jumpOnWaiting, d.jumpOnWaiting)
         jumpOnDone = try c.get(.jumpOnDone, d.jumpOnDone)
         holdSeconds = try c.get(.holdSeconds, d.holdSeconds)
+    }
+}
+
+extension Config.Tokens {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        weeks = try c.get(.weeks, d.weeks)
+        claude = try c.get(.claude, d.claude)
+        codex = try c.get(.codex, d.codex)
+        history = try c.get(.history, d.history)
     }
 }
 

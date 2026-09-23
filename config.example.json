@@ -6,7 +6,7 @@
     "match": "Wokyis",              // part of the screen's name in System Settings > Displays; only it is covered
   },
   "pages": {
-    "order": ["clock", "music", "climate", "markets", "agents"],  // music, climate, agents only rotate in when they have data
+    "order": ["clock", "music", "climate", "markets", "agents", "tokens"],  // all but clock and markets only rotate in when they have data
     "seconds": 12,                  // how long each page stays up
     "durations": { "clock": 15 },   // per-page overrides
   },
@@ -34,6 +34,12 @@
     "jumpOnWaiting": true,          // jump to the agents page when a session needs you
     "jumpOnDone": true,             // ...and briefly when one finishes
     "holdSeconds": 20,              // how long a jump holds the agents page
+  },
+  "tokens": {                       // the tokens page: what Claude Code and Codex used, by day
+    "weeks": 26,                    // weeks of days in the heatmap, 4 to 53
+    "claude": "~/.claude/projects", // Claude Code's transcripts; "" leaves Claude out. Only the token counts are read
+    "codex": "~/.codex",            // Codex's home (sessions/ and archived_sessions/); "" leaves Codex out
+    "history": "~/.local/state/deskdash/tokens.json",  // each day's totals, kept past Claude Code's 30 days; "" keeps none
   },
   "dyson": {
     "enabled": true,

@@ -4,9 +4,9 @@ A glanceable dashboard for the 5" 1280×720 screen on the Wokyis M5, the dock th
 
 One native Swift binary, no dependencies, about 1 KB/s of network, nothing listening on a port. It covers only the screen whose name contains `Wokyis` (Settings can pick another), and hides if that screen goes away. Everything personal, like your city, tickers, channels and purifier, is set in its Settings window and stays on your Mac.
 
-| Clock | Now Playing | Climate | Markets | Agents |
-|---|---|---|---|---|
-| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) |
+| Clock | Now Playing | Climate | Markets | Agents | Tokens |
+|---|---|---|---|---|---|
+| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![tokens](docs/tokens.png) |
 
 ## Pages
 
@@ -18,7 +18,7 @@ The pages rotate every 12 s (the clock gets 15 s). Click the dashboard for the n
 - **Weather & Time**: search for your city (Open-Meteo, no key). Until you choose one there is no weather. Optionally the clock follows that place's time zone, and the clock page then names the city.
 - **Markets**: add, reorder, or remove Hyperliquid symbols, each checked against Hyperliquid's list.
 - **Telegram**: add or remove public channels, each checked through its public preview, and preview a channel's newest post on the dock screen.
-- **Agents**: the alert behavior, and the command that installs the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
+- **Agents**: the alert behavior, the weeks in the token heatmap, and the command that installs the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
 
 Changes apply at once and are saved to `config.json`, writing only what differs from the defaults. `deskdash config` prints that.
 
@@ -44,6 +44,7 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
   | gray | **IDLE** | open but quiet; hidden after 12 h |
 
   This page only rotates in while some session is not idle. A thin bar per active session runs along the bottom of every other page, in the same colors.
+- **Tokens**: the tokens Claude Code and Codex used on this Mac. Today's count is large, with each agent's share under it, and the last 7 and 30 days and your streak of days with any use sit beside it. Underneath are the last 26 weeks as a GitHub-style heatmap: a column per week, a row per weekday from your calendar's first day of the week, and GitHub's shades of green, from none to the busiest quarter of your days. Today is outlined. While this page shows, the count catches up every 10 s. It appears once there is any use in those weeks (see [How token counting works](#how-token-counting-works)).
 
 **Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents.
 
@@ -108,6 +109,20 @@ All of that costs well under a millisecond. The SSD's free space goes through ma
 
 Sessions whose process is gone are dropped, even without a `SessionEnd`.
 
+## How token counting works
+
+deskdash reads the logs the agents already keep, and only the token counts in them. There is nothing to set up, and nothing leaves this Mac.
+
+- **Claude Code** writes each session to `~/.claude/projects/<project>/<session>.jsonl`, and its subagents' beside it. Every reply there carries the API's token counts. A reply in several parts is written as several lines with the same counts, and a resumed or forked session copies earlier replies into its new file, so each reply counts once, by its message id.
+- **Codex** writes each session to `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`archived_sessions/` once archived), with a `token_usage_record` per response, counted once by its id. Older versions wrote only the session's running total (`token_count`), which deskdash counts by its differences.
+- **What counts**: new input, cache reads, and output, reasoning included, as Claude's and OpenAI's own totals do. Cache reads are the conversation so far, read again on every turn, so they are most of it: 98% of a busy day of Claude Code. `deskdash tokens` prints each kind, day by day.
+- **Days** are this Mac's calendar days.
+- **History**: Claude Code deletes transcripts after 30 days (`cleanupPeriodDays` in its settings), so deskdash keeps each day's totals in `~/.local/state/deskdash/tokens.json`. The heatmap starts with whatever transcripts are on the Mac when you first run it, and fills in from there.
+- **Cost**: the first read of the logs takes a fraction of a second (60 MB, a busy day's worth, in 60-100 ms). After that deskdash reads only what was added: every 10 s while the tokens page shows, and every 5 minutes otherwise. Between those 5-minute passes it looks only at new sessions and ones written in the last day, about 1 ms even with thousands of logs, so a session resumed after a longer break is counted within 5 minutes.
+- The formats are the agents' own and undocumented. If an update changes them, the count stops growing rather than going wrong. `deskdash tokens --watch` prints today's count each time it grows.
+
+In `config.json`, `tokens.claude` and `tokens.codex` point elsewhere (`""` leaves an agent out), and `tokens.history` moves the history file.
+
 ## Build and run
 
 It needs macOS 14 or later and the Command Line Tools (`xcode-select --install`); no Xcode, no Homebrew. From the checkout:
@@ -138,6 +153,7 @@ Other ways to run it:
                                                #       hide [MINUTES], show, quit
 .build/release/deskdash windows                # each display and whose windows are on it
 .build/release/deskdash music                  # what Music and Spotify announce, as they do; Control-C stops
+.build/release/deskdash tokens                 # the tokens Claude Code and Codex used, each day; --watch follows today's
 swift scripts/fake-track.swift spotify         # pretend Spotify started a track (also music; paused, stopped)
 ```
 

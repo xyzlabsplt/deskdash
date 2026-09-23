@@ -141,7 +141,8 @@ private struct GeneralSettings: View {
     private static let pages = [PageOption(id: "clock", title: "Clock"),
                                 PageOption(id: "music", title: "Now Playing (while Music or Spotify plays)"),
                                 PageOption(id: "climate", title: "Climate (from the purifier)"),
-                                PageOption(id: "markets", title: "Markets"), PageOption(id: "agents", title: "Agents")]
+                                PageOption(id: "markets", title: "Markets"), PageOption(id: "agents", title: "Agents"),
+                                PageOption(id: "tokens", title: "Tokens (Claude Code and Codex usage)")]
 
     var body: some View {
         let draft = model.draft
@@ -552,6 +553,15 @@ private struct AgentsSettings: View {
                 StepSlider(title: "Hold the agents page for", value: model.setting(\.agents.holdSeconds),
                            steps: [5, 10, 15, 20, 30, 45, 60, 90, 120])
             }
+            Section("Token usage") {
+                StepSlider(title: "Weeks in the heatmap", value: weeks, steps: [13, 26, 39, 52], format: { "\(Int($0))" })
+                let history = model.draft.tokens.history
+                Text("Counted from Claude Code's transcripts and Codex's session logs on this Mac, reading only their token "
+                    + "counts. " + (history.isEmpty ? "" : "Each day's totals are also kept in \(history), since Claude Code "
+                    + "deletes transcripts after 30 days. ") + "The Tokens page is under General → Pages.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Codex") {
                 Text("Codex sessions appear once deskdash's hook is installed. Run this in Terminal:")
                     .foregroundStyle(.secondary)
@@ -561,6 +571,10 @@ private struct AgentsSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var weeks: Binding<Double> {
+        Binding(get: { Double(model.draft.tokens.span) }, set: { count in model.update { $0.tokens.weeks = Int(count) } })
     }
 
     /// The script's full path, quoted for the shell if it needs it.

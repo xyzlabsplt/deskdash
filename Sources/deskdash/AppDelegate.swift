@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let telegram: TelegramService
     private let stats: SystemStatsService
     private let music: NowPlayingService
+    private let tokens: TokensService
     private var window: NSWindow?
     private var displayAssertion: IOPMAssertionID = 0
     private var hiddenUntil: Date?
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         telegram = TelegramService(dash: dash)
         stats = SystemStatsService(dash: dash)
         music = NowPlayingService(dash: dash)
+        tokens = TokensService(dash: dash)
         super.init()
     }
 
@@ -71,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { options.windowed }
 
     /// Ticks on each whole second: flips the clock, publishes prices, the playing track and (every 2 s) the Mac's
-    /// load, rotates pages, keeps the window out of the way of other windows, reloads config.
+    /// load, rotates pages, counts tokens when due, keeps the window out of the way of other windows, reloads config.
     private func runClock() async {
         var n = 0
         while !Task.isCancelled {
@@ -81,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             music.flush()
             if n % 2 == 0 { stats.sample() }
             dash.tick()
+            tokens.tick()
             if let until = hiddenUntil, Date() >= until { placeWindow() }
             updateStacking()
             n += 1
@@ -107,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         dyson.apply(dash.config.dyson)
         telegram.apply(dash.config.telegram)
         stats.apply(dash.config.stats)
+        tokens.apply(dash.config.tokens, enabled: dash.config.pages.order.contains("tokens"))
         placeWindow()
         updateDisplayAssertion()
     }
@@ -501,6 +505,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             dash.indoor = IndoorReading(sensorData: ["tact": "2976", "hact": "58", "p25r": "4", "p10r": "6",
                                                      "va10": "12", "noxl": "4", "co2r": "712", "hchr": "9"])
             dash.stats = .demo
+            dash.tokens = .demo(today: LocalDay.of(Date()))
+            dash.weekStart = 1  // GitHub's Sunday, not this Mac's first weekday
             var track = NowPlaying.demo(now: Date())
             if !dash.config.music.artwork { track?.artwork = nil }
             dash.play(track, announce: false)
@@ -512,6 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 dash.indoor = reading
             }
             await stats.prime()
+            if dash.config.pages.order.contains("tokens") { await tokens.scanOnce(dash.config.tokens) }
         }
         dash.tick()
         dash.stillFrame = true

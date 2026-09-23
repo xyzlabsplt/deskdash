@@ -6,6 +6,7 @@ enum Page: Hashable, Sendable {
     case climate
     case markets(Int)
     case agents
+    case tokens
 
     var name: String {
         switch self {
@@ -14,6 +15,7 @@ enum Page: Hashable, Sendable {
         case .climate: "climate"
         case .markets: "markets"
         case .agents: "agents"
+        case .tokens: "tokens"
         }
     }
 
@@ -29,6 +31,7 @@ enum Page: Hashable, Sendable {
         case .climate: "Climate"
         case .markets(let i): i == 0 ? "Markets" : "Markets \(i + 1)"
         case .agents: "Agents"
+        case .tokens: "Tokens"
         }
     }
 }
@@ -48,6 +51,10 @@ final class Dashboard {
     /// What Music or Spotify is playing on this Mac; nil while nothing plays.
     private(set) var track: NowPlaying?
     var sessions: [AgentSession] = []
+    /// Claude Code's and Codex's tokens by day; nil while the tokens page is off.
+    var tokens: TokenHistory?
+    /// The token heatmap's top row, as Calendar's weekday (1 is Sunday); nil follows this Mac's calendar.
+    var weekStart: Int?
     var demo = false
     var paused = false
     private(set) var page = Page.clock
@@ -78,6 +85,7 @@ final class Dashboard {
             case "climate" where hasIndoor: out.append(.climate)
             case "markets": out += (0..<marketPageCount).map { Page.markets($0) }
             case "agents" where hasActiveAgents: out.append(.agents)
+            case "tokens" where hasTokens: out.append(.tokens)
             default: break
             }
         }
@@ -156,6 +164,14 @@ final class Dashboard {
             doneFlashUntil = Date().addingTimeInterval(6)
             if cfg.jumpOnDone && page != .agents { show(.agents, hold: min(10, cfg.holdSeconds)) }
         }
+    }
+
+    // MARK: tokens
+
+    /// Any use in the heatmap's weeks.
+    var hasTokens: Bool {
+        let today = LocalDay.of(now)
+        return tokens?.used(in: (today - config.tokens.span * 7)...today) ?? false
     }
 
     // MARK: telegram
