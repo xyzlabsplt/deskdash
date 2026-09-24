@@ -186,9 +186,10 @@ enum LocalDay {
 /// Reads token counts out of the agents' own logs on this Mac:
 ///  - Claude Code's transcripts, `<projects>/<project>/<session>.jsonl`, and its subagents' beside them in
 ///    `<session>/subagents/`, a workflow's agents one level further down (`workflows/wf_<id>/`). Each assistant line
-///    carries the API's `usage`. A reply with several blocks is written as
-///    several lines with the same message id and usage, and a resumed or forked session copies earlier lines into its
-///    new file, so a message counts once, by id.
+///    carries the API's `usage`. A reply with several blocks is written as several lines, each with the reply's usage
+///    so far (older versions wrote it growing), and a resumed or forked session copies earlier lines into its new file,
+///    so a reply counts once, by its message and request ids, at the largest of its lines. `<synthetic>` replies, which
+///    Claude Code writes itself, are left out, and so are the `journal.jsonl` files of workflows.
 ///  - Codex's rollouts, `<codex>/sessions/YYYY/MM/DD/rollout-*.jsonl` and `<codex>/archived_sessions/`. Each response
 ///    writes a `token_usage_record` with its id. Versions before those records wrote only `token_count` events,
 ///    whose session totals are counted by the difference from the one before.
@@ -208,6 +209,12 @@ actor TokenScanner {
         let modified: Int  // seconds since 1970
     }
 
+    /// A Claude reply's usage: the largest of its lines so far.
+    private struct Reply {
+        let time: Int  // its first line's, seconds since 1970
+        var input: Int, cacheWrite: Int, cacheRead: Int, output: Int
+    }
+
     private struct Place {
         var path: String
         var agent: Agent
@@ -225,7 +232,8 @@ actor TokenScanner {
     private var places: [String: Place] = [:]
     private var walkedAt: Int?  // the last thorough pass
     private var listed: [String: (stamp: Int, folders: [String])] = [:]  // each folder when last listed: its time, in ns
-    private var seen = Set<Int>()  // Claude message ids and Codex response ids counted, hashed
+    private var seen = Set<Int>()  // replies counted: Claude's message and request ids, Codex's response ids, hashed
+    private var recent: [Int: Reply] = [:]  // the last day's Claude replies, whose later lines may say more
     private var counted: [Int: DayTokens] = [:]  // what the logs on disk hold, by day
     private var history: [Int: DayTokens]?  // the history file, and what has been added to it since
     private var saved: [Int: DayTokens]?
@@ -264,6 +272,7 @@ actor TokenScanner {
         if thorough {
             walkedAt = clock
             places = places.filter { present.contains($0.key) }  // deleted, or moved out of reach
+            recent = recent.filter { $0.value.time >= clock - 86_400 }
         }
 
         var merged = history ?? [:]
@@ -315,7 +324,7 @@ actor TokenScanner {
             }
             return folders
         }
-        let jsonl = { (name: String) in name.hasSuffix(".jsonl") }
+        let jsonl = { (name: String) in name.hasSuffix(".jsonl") && name != "journal.jsonl" }  // a journal holds no counts
         /// A session's subagents, and a workflow's agents in `workflows/wf_<id>/`: a quick pass lists only the folders
         /// that changed, but looks into each of them.
         func subagents(_ dir: String, depth: Int = 3) {
@@ -484,6 +493,7 @@ actor TokenScanner {
     private struct ClaudeLine: Decodable {
         struct Message: Decodable {
             let id: String?
+            let model: String?
             let usage: Usage?
         }
         struct Usage: Decodable {
@@ -493,17 +503,41 @@ actor TokenScanner {
             let output_tokens: Int?
         }
         let timestamp: String?
+        let requestId: String?
         let message: Message?
     }
 
     private func countClaude(_ line: Data) {
-        guard let entry = try? decoder.decode(ClaudeLine.self, from: line), let usage = entry.message?.usage,
+        guard let entry = try? decoder.decode(ClaudeLine.self, from: line), let message = entry.message,
+              let usage = message.usage, message.model != "<synthetic>",
               let time = entry.timestamp.flatMap(LocalDay.seconds(iso:))
         else { return }
-        if let id = entry.message?.id, !seen.insert(id.hashValue).inserted { return }
-        add(TokenCount(input: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
-                       cached: usage.cache_read_input_tokens ?? 0, output: usage.output_tokens ?? 0),
-            .claude, at: time)
+        let counts = Reply(time: time, input: max(0, usage.input_tokens ?? 0), cacheWrite: max(0, usage.cache_creation_input_tokens ?? 0),
+                         cacheRead: max(0, usage.cache_read_input_tokens ?? 0), output: max(0, usage.output_tokens ?? 0))
+        guard let id = message.id else {
+            return add(TokenCount(input: counts.input + counts.cacheWrite, cached: counts.cacheRead, output: counts.output), .claude,
+                       at: time)
+        }
+        var hasher = Hasher()
+        hasher.combine(id)
+        hasher.combine(entry.requestId)
+        let key = hasher.finalize()
+        if seen.insert(key).inserted {
+            recent[key] = counts
+            add(TokenCount(input: counts.input + counts.cacheWrite, cached: counts.cacheRead, output: counts.output), .claude,
+                at: time)
+        } else if var known = recent[key] {
+            // A later line of the same reply: count whatever it adds, on the reply's own day.
+            let grown = TokenCount(input: max(0, counts.input - known.input) + max(0, counts.cacheWrite - known.cacheWrite),
+                                   cached: max(0, counts.cacheRead - known.cacheRead), output: max(0, counts.output - known.output))
+            guard grown.total > 0 else { return }
+            known.input = max(known.input, counts.input)
+            known.cacheWrite = max(known.cacheWrite, counts.cacheWrite)
+            known.cacheRead = max(known.cacheRead, counts.cacheRead)
+            known.output = max(known.output, counts.output)
+            recent[key] = known
+            add(grown, .claude, at: known.time)
+        }
     }
 
     private struct CodexLine: Decodable {
