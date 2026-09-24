@@ -142,7 +142,7 @@ private struct GeneralSettings: View {
                                 PageOption(id: "music", title: "Now Playing (while Music or Spotify plays)"),
                                 PageOption(id: "climate", title: "Climate (from the purifier)"),
                                 PageOption(id: "markets", title: "Markets"), PageOption(id: "agents", title: "Agents"),
-                                PageOption(id: "tokens", title: "Tokens (Claude Code and Codex usage)")]
+                                PageOption(id: "tokens", title: "Tokens (what the coding agents used)")]
 
     var body: some View {
         let draft = model.draft
@@ -556,9 +556,9 @@ private struct AgentsSettings: View {
             Section("Token usage") {
                 StepSlider(title: "Weeks in the heatmap", value: weeks, steps: [13, 26, 39, 52], format: { "\(Int($0))" })
                 let history = model.draft.tokens.history
-                Text("Counted from Claude Code's transcripts and Codex's session logs on this Mac, reading only their token "
-                    + "counts. " + (history.isEmpty ? "" : "Each day's totals are also kept in \(history), since Claude Code "
-                    + "deletes transcripts after 30 days. ") + "The Tokens page is under General → Pages.")
+                Text("Counted from the logs Claude Code, Codex, Gemini CLI and Muse Code keep on this Mac, reading only their "
+                    + "token counts. " + (history.isEmpty ? "" : "Each day's totals are also kept in \(history), since Claude "
+                    + "Code deletes transcripts after 30 days. ") + "The Tokens page is under General → Pages.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

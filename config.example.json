@@ -35,10 +35,12 @@
     "jumpOnDone": true,             // ...and briefly when one finishes
     "holdSeconds": 20,              // how long a jump holds the agents page
   },
-  "tokens": {                       // the tokens page: what Claude Code and Codex used, by day
+  "tokens": {                       // the tokens page: what the coding agents used, by day and all time
     "weeks": 26,                    // weeks of days in the heatmap, 4 to 53
     "claude": "~/.claude/projects", // Claude Code's transcripts; "" leaves Claude out. Only the token counts are read
     "codex": "~/.codex",            // Codex's home (sessions/ and archived_sessions/); "" leaves Codex out
+    "gemini": "~/.gemini",          // Gemini CLI's home (tmp/<project>/chats/); "" leaves Gemini out
+    "muse": "~/.local/share/muse",  // Muse Code's data folder (sessions/); "" leaves Muse out
     "history": "~/.local/state/deskdash/tokens.json",  // each day's totals, kept past Claude Code's 30 days; "" keeps none
   },
   "dyson": {

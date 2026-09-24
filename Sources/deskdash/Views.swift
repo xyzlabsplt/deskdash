@@ -903,8 +903,8 @@ struct AttentionFrame: View {
 
 // MARK: tokens
 
-/// The tokens Claude Code and Codex used on this Mac: today's count large, with each agent's share under it; the last
-/// 7 and 30 days and the streak of days with any use beside it; and underneath, the last `tokens.weeks` weeks as a
+/// The tokens the coding agents used on this Mac: today's count large, with the agents' shares under it; the last 7 and
+/// 30 days, all time, and the streak of days with any use beside it; and underneath, the last `tokens.weeks` weeks as a
 /// GitHub-style heatmap, a column per week, brighter green for busier days.
 struct TokensPage: View {
     let dash: Dashboard
@@ -914,7 +914,9 @@ struct TokensPage: View {
         let today = LocalDay.of(dash.now)
         let weeks = dash.config.tokens.span
         let day = history.on(today)
-        let shown = history.sum((today - weeks * 7)...today)  // an agent unused in all these weeks goes unnamed
+        let window = history.sum((today - weeks * 7)...today)
+        // The agents used in these weeks, most used first: three fit.
+        let agents = TokenAgent.allCases.filter { window[$0].total > 0 }.sorted { window[$0].total > window[$1].total }
         let streak = history.streak(through: today)
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
@@ -926,17 +928,16 @@ struct TokensPage: View {
                         .foregroundStyle(day.total > 0 ? Theme.text : Theme.faint)
                         .padding(.top, -14)
                         .padding(.bottom, -6)
-                    HStack(spacing: 40) {
-                        if shown.claude.total > 0 { TokenStat(label: "CLAUDE", count: day.claude.total, size: 46) }
-                        if shown.codex.total > 0 { TokenStat(label: "CODEX", count: day.codex.total, size: 46) }
-                    }
+                    TokenShares(day: day, agents: Array(agents.prefix(3)))
                 }
                 Spacer(minLength: 40)
-                VStack(alignment: .trailing, spacing: 2) {
-                    TokenStat(label: "7 DAYS", count: history.sum((today - 6)...today).total, size: 64)
-                    TokenStat(label: "30 DAYS", count: history.sum((today - 29)...today).total, size: 64)
-                    TokenStat(label: "STREAK", value: streak == 1 ? "1 day" : "\(streak) days", size: 64)
+                VStack(alignment: .trailing, spacing: 0) {
+                    TokenStat(label: "7 DAYS", count: history.sum((today - 6)...today).total, size: 56)
+                    TokenStat(label: "30 DAYS", count: history.sum((today - 29)...today).total, size: 56)
+                    TokenStat(label: "ALL TIME", count: history.allTime, size: 56)
+                    TokenStat(label: "STREAK", value: streak == 1 ? "1 day" : "\(streak) days", size: 56)
                 }
+                .fixedSize()
             }
             .lineLimit(1)
             TokenHeatmap(history: history, today: today, weeks: weeks,
@@ -959,6 +960,25 @@ struct TokenCaption: View {
             .font(Theme.font(28, .heavy))
             .tracking(2)
             .foregroundStyle(Theme.secondary)
+    }
+}
+
+/// Each agent's tokens today, as one line of captions and numbers that shrinks to fit the room beside the stats.
+struct TokenShares: View {
+    let day: DayTokens
+    let agents: [TokenAgent]
+
+    var body: some View {
+        agents.enumerated().reduce(Text("")) { line, item in
+            let (index, agent) = item
+            let count = day[agent].total
+            return line + Text(index == 0 ? "" : "   ").font(Theme.font(46, .bold))
+                + Text(agent.label + "  ").font(Theme.font(28, .heavy)).tracking(2).foregroundStyle(Theme.secondary)
+                + Text(Fmt.tokens(count)).font(Theme.font(46, .bold)).foregroundStyle(count > 0 ? Theme.text : Theme.faint)
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
     }
 }
 

@@ -76,12 +76,15 @@ struct Config: Codable, Equatable, Sendable {
     struct Tokens: Codable, Equatable, Sendable {
         /// Weeks of days in the heatmap, this one included.
         var weeks = 26
-        /// Claude Code's transcripts (a folder per project) and Codex's home (its sessions/ and archived_sessions/).
-        /// Only the token counts in them are read. "" leaves one out.
+        /// Where each agent keeps its logs: Claude Code's transcripts (a folder per project), Codex's home (its sessions/
+        /// and archived_sessions/), Gemini CLI's (its tmp/<project>/chats/), and Muse Code's data folder (its
+        /// sessions/). Only the token counts in them are read. "" leaves one out.
         var claude = "~/.claude/projects"
         var codex = "~/.codex"
-        /// deskdash's own record of each day's totals: Claude Code deletes its transcripts after 30 days, and the
-        /// heatmap reaches back further. "" keeps none.
+        var gemini = "~/.gemini"
+        var muse = "~/.local/share/muse"
+        /// deskdash's own record of each day's totals: Claude Code deletes its transcripts after 30 days, and the page
+        /// counts all time. "" keeps none.
         var history = "~/.local/state/deskdash/tokens.json"
 
         /// `weeks` as the heatmap draws it: 4 to 53.
@@ -221,6 +224,8 @@ extension Config.Tokens {
         weeks = try c.get(.weeks, d.weeks)
         claude = try c.get(.claude, d.claude)
         codex = try c.get(.codex, d.codex)
+        gemini = try c.get(.gemini, d.gemini)
+        muse = try c.get(.muse, d.muse)
         history = try c.get(.history, d.history)
     }
 }

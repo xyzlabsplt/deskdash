@@ -12,25 +12,57 @@ struct TokenCount: Codable, Equatable, Sendable {
     static func + (a: TokenCount, b: TokenCount) -> TokenCount {
         TokenCount(input: a.input + b.input, cached: a.cached + b.cached, output: a.output + b.output)
     }
-}
 
-/// One day's tokens, per agent.
-struct DayTokens: Codable, Equatable, Sendable {
-    var claude = TokenCount()
-    var codex = TokenCount()
-
-    var total: Int { claude.total + codex.total }
-    var all: TokenCount { claude + codex }
-
-    static func + (a: DayTokens, b: DayTokens) -> DayTokens {
-        DayTokens(claude: a.claude + b.claude, codex: a.codex + b.codex)
+    static func - (a: TokenCount, b: TokenCount) -> TokenCount {
+        TokenCount(input: a.input - b.input, cached: a.cached - b.cached, output: a.output - b.output)
     }
 
-    /// The larger count of each agent. Transcripts only ever grow until they are deleted, so the larger one is the
-    /// more complete.
+    static func += (a: inout TokenCount, b: TokenCount) { a = a + b }
+    static func -= (a: inout TokenCount, b: TokenCount) { a = a - b }
+}
+
+/// The coding agents whose logs are read, by the name the history file and the config use.
+enum TokenAgent: String, CaseIterable, Sendable {
+    case claude, codex, gemini, muse
+
+    /// As the tokens page names it.
+    var label: String { rawValue.uppercased() }
+}
+
+/// One day's tokens, per agent. In the history file it is an object of agents, {"claude": {...}, "codex": {...}}, and
+/// an agent this version does not know is kept as it is.
+struct DayTokens: Codable, Equatable, Sendable {
+    var agents: [String: TokenCount]
+
+    init(agents: [String: TokenCount] = [:]) {
+        self.agents = agents
+    }
+
+    subscript(_ agent: TokenAgent) -> TokenCount {
+        get { agents[agent.rawValue] ?? TokenCount() }
+        set { agents[agent.rawValue] = newValue }
+    }
+
+    var total: Int { agents.values.reduce(0) { $0 + $1.total } }
+    var all: TokenCount { agents.values.reduce(TokenCount(), +) }
+
+    static func + (a: DayTokens, b: DayTokens) -> DayTokens {
+        DayTokens(agents: a.agents.merging(b.agents, uniquingKeysWith: +))
+    }
+
+    /// The larger count of each agent. Logs only ever grow until they are deleted, so the larger one is the more
+    /// complete.
     static func fuller(_ a: DayTokens, _ b: DayTokens) -> DayTokens {
-        DayTokens(claude: a.claude.total >= b.claude.total ? a.claude : b.claude,
-                  codex: a.codex.total >= b.codex.total ? a.codex : b.codex)
+        DayTokens(agents: a.agents.merging(b.agents) { $0.total >= $1.total ? $0 : $1 })
+    }
+
+    init(from decoder: Decoder) throws {
+        agents = try decoder.singleValueContainer().decode([String: TokenCount].self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(agents)
     }
 }
 
@@ -44,14 +76,6 @@ extension TokenCount {
     }
 }
 
-extension DayTokens {
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        claude = try c.get(.claude, TokenCount())
-        codex = try c.get(.codex, TokenCount())
-    }
-}
-
 /// Every day's tokens deskdash knows of, by `LocalDay` number.
 struct TokenHistory: Equatable, Sendable {
     var days: [Int: DayTokens] = [:]
@@ -61,6 +85,9 @@ struct TokenHistory: Equatable, Sendable {
     func sum(_ range: ClosedRange<Int>) -> DayTokens {
         range.reduce(DayTokens()) { $0 + on($1) }
     }
+
+    /// Every day on record: what the logs on this Mac hold, and the history file's days.
+    var allTime: Int { days.values.reduce(0) { $0 + $1.total } }
 
     func used(in range: ClosedRange<Int>) -> Bool {
         days.contains { range.contains($0.key) && $0.value.total > 0 }
@@ -78,7 +105,8 @@ struct TokenHistory: Equatable, Sendable {
     }
 
     /// For `snapshot --demo`: a made-up year of use that grows toward today, heavy on weekdays, light or none at
-    /// weekends, with Codex on about half the days and today. The same day always gets the same numbers.
+    /// weekends, with Codex on about half the days and Gemini on a quarter, both today. The same day always gets the
+    /// same numbers.
     static func demo(today: Int) -> TokenHistory {
         var days: [Int: DayTokens] = [:]
         for day in (today - 7 * 54)...today {
@@ -95,10 +123,15 @@ struct TokenHistory: Equatable, Sendable {
             let trend = 0.35 + 0.65 * Double(day - today + 7 * 54) / Double(7 * 54)
             let claude = 95e6 * trend * (weekend ? 0.3 : 1) * (0.2 + 1.6 * random())
             let codex = day == today || random() < 0.5 ? claude * 0.35 * random() : 0
+            let gemini = day == today || random() < 0.25 ? claude * 0.2 * random() : 0
             func split(_ total: Double) -> TokenCount {
                 TokenCount(input: Int(total * 0.035), cached: Int(total * 0.95), output: Int(total * 0.015))
             }
-            days[day] = DayTokens(claude: split(claude), codex: split(codex))
+            var tokens = DayTokens()
+            for (agent, total) in [(TokenAgent.claude, claude), (.codex, codex), (.gemini, gemini)] where total > 0 {
+                tokens[agent] = split(total)
+            }
+            days[day] = tokens
         }
         return TokenHistory(days: days)
     }
@@ -193,13 +226,18 @@ enum LocalDay {
 ///  - Codex's rollouts, `<codex>/sessions/YYYY/MM/DD/rollout-*.jsonl` and `<codex>/archived_sessions/`. Each response
 ///    writes a `token_usage_record` with its id. Versions before those records wrote only `token_count` events,
 ///    whose session totals are counted by the difference from the one before.
-/// Only lines that carry token counts are decoded, and only their counts and times are kept: never the conversation.
-/// It keeps its place in each file, so after the first pass a scan reads only what was appended since the last.
+///  - Gemini CLI's sessions, `<gemini>/tmp/<project>/chats/*.json`: one JSON file per session, written over as the
+///    session grows, so it is read whole when it changes and replaces what it counted before. Each reply in it carries
+///    its `tokens`.
+///  - Muse Code's sessions, `<muse>/sessions/YYYY/MM/DD/<session>/session.jsonl`, each subagent's in its own
+///    `subagent/<id>/session.jsonl` below. Each `model_completed` event carries one model call's usage.
+/// Only what carries token counts is decoded, and only the counts and times are kept: never the conversation. It keeps
+/// its place in each log, so after the first pass a scan reads only what was appended since the last.
 ///
-/// Claude Code deletes transcripts after 30 days (its `cleanupPeriodDays`), and the heatmap reaches back further, so
-/// each day's totals are also kept in the history file, `tokens.history`.
+/// Claude Code deletes transcripts after 30 days (its `cleanupPeriodDays`), and the page counts all time, so each day's
+/// totals are also kept in the history file, `tokens.history`.
 actor TokenScanner {
-    private enum Agent { case claude, codex }
+    private typealias Agent = TokenAgent
 
     private struct Transcript {
         let path: String
@@ -219,21 +257,22 @@ actor TokenScanner {
         var path: String
         var agent: Agent
         var modified: Int  // when the file was last seen written, seconds since 1970
-        var offset = 0  // bytes read, up to the end of the last whole line
+        var offset = 0  // bytes read, up to the end of the last whole line; a Gemini session's size when last read
         var codexTotal: TokenCount?  // the session total in the last token_count event
         var codexRecords = false  // this rollout has token_usage_records, which count instead
     }
 
     private let claude: String?
     private let codex: String?
+    private let gemini: String?
+    private let muse: String?
     private var file: URL?  // the history file; nil once it turns out to be one not to write over
-    /// Days back that the heatmap and the stats reach. Older lines in a log not read yet are skipped.
-    private let reach: Int
     private var places: [String: Place] = [:]
     private var walkedAt: Int?  // the last thorough pass
     private var listed: [String: (stamp: Int, folders: [String])] = [:]  // each folder when last listed: its time, in ns
-    private var seen = Set<Int>()  // replies counted: Claude's message and request ids, Codex's response ids, hashed
+    private var seen = Set<Int>()  // counted already: Claude replies, Codex responses and Muse calls, by id, hashed
     private var recent: [Int: Reply] = [:]  // the last day's Claude replies, whose later lines may say more
+    private var sessions: [String: [Int: TokenCount]] = [:]  // each Gemini session's count by day, as last read
     private var counted: [Int: DayTokens] = [:]  // what the logs on disk hold, by day
     private var history: [Int: DayTokens]?  // the history file, and what has been added to it since
     private var saved: [Int: DayTokens]?
@@ -243,10 +282,12 @@ actor TokenScanner {
     private let decoder = JSONDecoder()
 
     init(_ cfg: Config.Tokens) {
-        claude = cfg.claude.isEmpty ? nil : Paths.resolve(cfg.claude).path
-        codex = cfg.codex.isEmpty ? nil : Paths.resolve(cfg.codex).path
+        func folder(_ path: String) -> String? { path.isEmpty ? nil : Paths.resolve(path).path }
+        claude = folder(cfg.claude)
+        codex = folder(cfg.codex)
+        gemini = folder(cfg.gemini)
+        muse = folder(cfg.muse)
         file = cfg.history.isEmpty ? nil : Paths.resolve(cfg.history)
-        reach = max(cfg.span * 7, 31) + 7
     }
 
     /// Reads what the logs gained since the last call and returns every day known, from the logs and the history file.
@@ -271,7 +312,7 @@ actor TokenScanner {
         for transcript in transcripts { bytes += read(transcript) }
         if thorough {
             walkedAt = clock
-            places = places.filter { present.contains($0.key) }  // deleted, or moved out of reach
+            places = places.filter { present.contains($0.key) }  // deleted
             recent = recent.filter { $0.value.time >= clock - 86_400 }
         }
 
@@ -299,18 +340,12 @@ actor TokenScanner {
     /// file (a new session), and at the logs written in the last day, with their sessions' subagent folders. A session
     /// resumed after longer waits for the next thorough pass.
     private func find(now: Int, thorough: Bool) -> ([Transcript], Set<String>) {
-        let horizon = now - reach * 86_400
         let recent = now - 86_400
         var out: [Transcript] = []
         var keys = Set<String>()
         if thorough { listed = [:] }
         func add(_ path: String, _ key: String, _ agent: Agent, _ entry: Entry? = nil) {
             guard keys.insert(key).inserted, let file = entry ?? Self.entry(at: path) else { return }
-            if places[key] == nil, file.modified < horizon {
-                // Last written before the heatmap reaches: nothing in it to count, but anything added to it later is.
-                places[key] = Place(path: path, agent: agent, modified: file.modified, offset: file.size)
-                return
-            }
             out.append(Transcript(path: path, key: key, agent: agent, size: file.size, modified: file.modified))
         }
         /// The logs in a folder that changed, every one on a thorough pass and the new ones on a quick pass, and
@@ -324,42 +359,67 @@ actor TokenScanner {
             }
             return folders
         }
-        let jsonl = { (name: String) in name.hasSuffix(".jsonl") && name != "journal.jsonl" }  // a journal holds no counts
-        /// A session's subagents, and a workflow's agents in `workflows/wf_<id>/`: a quick pass lists only the folders
-        /// that changed, but looks into each of them.
-        func subagents(_ dir: String, depth: Int = 3) {
-            for folder in scan(dir, .claude, where: jsonl) where depth > 0 { subagents(dir + "/" + folder, depth: depth - 1) }
+        /// A folder and those below it, `depth` levels down: a quick pass lists only the folders that changed, but
+        /// looks into each of them.
+        func walk(_ dir: String, _ agent: Agent, depth: Int, where wanted: (String) -> Bool) {
+            for folder in scan(dir, agent, where: wanted) where depth > 0 {
+                walk(dir + "/" + folder, agent, depth: depth - 1, where: wanted)
+            }
+        }
+        /// On a quick pass: the logs written in the last day. Returns their keys.
+        func hot(_ agent: Agent) -> [String] {
+            var found: [String] = []
+            for (key, place) in places where place.agent == agent && place.modified >= recent {
+                add(place.path, key, agent)
+                found.append(key)
+            }
+            return found
+        }
+        // The day folders (YYYY/MM/DD) where a new Codex or Muse session starts: yesterday's to tomorrow's, whichever
+        // zone the agent dates them in.
+        let today = LocalDay.of(Date(timeIntervalSince1970: Double(now)))
+        let days = (today - 1...today + 1).map { day in
+            let date = LocalDay.civil(day)
+            return String(format: "%04d/%02d/%02d", date.year, date.month, date.day)
         }
         if let claude {
+            let jsonl = { (name: String) in name.hasSuffix(".jsonl") && name != "journal.jsonl" }  // a journal holds no counts
             for project in list(claude, always: thorough).folders {
                 let dir = claude + "/" + project
-                for session in scan(dir, .claude, where: jsonl) where thorough { subagents(dir + "/" + session + "/subagents") }
+                for session in scan(dir, .claude, where: jsonl) where thorough {
+                    walk(dir + "/" + session + "/subagents", .claude, depth: 3, where: jsonl)
+                }
             }
             if !thorough {
-                for (key, place) in places where place.agent == .claude && place.modified >= recent {
-                    add(place.path, key, .claude)
-                    if !key.contains("/subagents/") { subagents(String(key.dropLast(6)) + "/subagents") }
+                for key in hot(.claude) where !key.contains("/subagents/") {
+                    walk(String(key.dropLast(6)) + "/subagents", .claude, depth: 3, where: jsonl)  // a live session's
                 }
             }
         }
         if let codex {
             let rollout = { (name: String) in name.hasPrefix("rollout-") && name.hasSuffix(".jsonl") }
             if thorough {
-                func walk(_ dir: String, depth: Int) {
-                    for folder in scan(dir, .codex, where: rollout) where depth > 0 { walk(dir + "/" + folder, depth: depth - 1) }
-                }
-                walk(codex + "/sessions", depth: 3)
-                walk(codex + "/archived_sessions", depth: 0)
+                walk(codex + "/sessions", .codex, depth: 3, where: rollout)
+                walk(codex + "/archived_sessions", .codex, depth: 0, where: rollout)
             } else {
-                // A new rollout starts in the folder of its day; one already known is written where it is.
-                let today = LocalDay.of(Date(timeIntervalSince1970: Double(now)))
-                for day in [today - 1, today] {
-                    let date = LocalDay.civil(day)
-                    _ = scan(codex + String(format: "/sessions/%04d/%02d/%02d", date.year, date.month, date.day), .codex,
-                             where: rollout)
-                }
-                for (key, place) in places where place.agent == .codex && place.modified >= recent {
-                    add(place.path, key, .codex)
+                for day in days { walk(codex + "/sessions/" + day, .codex, depth: 0, where: rollout) }
+                _ = hot(.codex)
+            }
+        }
+        if let gemini {
+            for project in list(gemini + "/tmp", always: thorough).folders {
+                _ = scan(gemini + "/tmp/" + project + "/chats", .gemini, where: { $0.hasSuffix(".json") })
+            }
+            if !thorough { _ = hot(.gemini) }
+        }
+        if let muse {
+            let session = { (name: String) in name == "session.jsonl" }
+            if thorough {
+                walk(muse + "/sessions", .muse, depth: 8, where: session)
+            } else {
+                for day in days { walk(muse + "/sessions/" + day, .muse, depth: 5, where: session) }
+                for key in hot(.muse) {
+                    walk(String(key.dropLast("session.jsonl".count)) + "subagent", .muse, depth: 4, where: session)
                 }
             }
         }
@@ -422,6 +482,7 @@ actor TokenScanner {
 
     /// Reads a log from where the last scan stopped, a few MB at a time; returns the bytes read.
     private func read(_ transcript: Transcript) -> Int {
+        if transcript.agent == .gemini { return readSession(transcript) }
         var place = places[transcript.key] ?? Place(path: transcript.path, agent: transcript.agent, modified: 0)
         if transcript.size < place.offset {  // rewritten: read it again; what was counted stays counted
             place = Place(path: transcript.path, agent: transcript.agent, modified: 0)
@@ -452,6 +513,7 @@ actor TokenScanner {
     private static let usage = Array(#""usage""#.utf8)
     private static let record = Array(#""type":"token_usage_record""#.utf8)
     private static let tokenCount = Array(#""type":"token_count""#.utf8)
+    private static let modelCompleted = Array(#""model_completed""#.utf8)
 
     /// Counts the whole lines in `data`; returns the bytes they take, through the last newline.
     private func lines(in data: Data, _ agent: Agent, _ place: inout Place) -> Int {
@@ -469,6 +531,8 @@ actor TokenScanner {
                 let keep = switch agent {
                 case .claude: has(Self.assistant, start, length) && has(Self.usage, start, length)
                 case .codex: has(Self.record, start, length) || has(Self.tokenCount, start, length)
+                case .muse: has(Self.modelCompleted, start, length)
+                case .gemini: false  // read whole, by readSession
                 }
                 if keep { wanted.append(start..<end) }
                 start = end + 1
@@ -482,6 +546,8 @@ actor TokenScanner {
             switch agent {
             case .claude: countClaude(line)
             case .codex: countCodex(line, &place, &totals)
+            case .muse: countMuse(line)
+            case .gemini: break
             }
         }
         if !place.codexRecords {
@@ -589,19 +655,129 @@ actor TokenScanner {
         }
     }
 
+    /// Gemini CLI writes a session's file over as it grows: when its size or time changes, it is read whole, and what
+    /// it counts replaces what it counted before. A reply's `tokens` may count the cached input inside the input: when
+    /// the total adds up that way, the cached part is taken out of the input.
+    private func readSession(_ transcript: Transcript) -> Int {
+        if let known = places[transcript.key], known.offset == transcript.size, known.modified == transcript.modified {
+            return 0
+        }
+        guard let data = FileManager.default.contents(atPath: transcript.path),
+              let session = try? decoder.decode(GeminiSession.self, from: data)
+        else { return 0 }  // being written: the next scan tries again
+        places[transcript.key] = Place(path: transcript.path, agent: .gemini, modified: transcript.modified,
+                                       offset: transcript.size)
+        var replies: [String: GeminiSession.Message] = [:]  // by id: a later copy replaces an earlier one
+        var unnamed: [GeminiSession.Message] = []
+        for message in session.messages ?? [] where message.tokens != nil && !(message.model ?? "").isEmpty {
+            if let id = message.id { replies[id] = message } else { unnamed.append(message) }
+        }
+        var byDay: [Int: TokenCount] = [:]
+        for message in Array(replies.values) + unnamed {
+            guard let tokens = message.tokens?.count, tokens.total > 0,
+                  let time = (message.timestamp ?? session.startTime).flatMap(LocalDay.seconds(iso:))
+            else { continue }
+            byDay[day(of: time), default: TokenCount()] += tokens
+        }
+        for (day, tokens) in sessions[transcript.key] ?? [:] { counted[day, default: DayTokens()][.gemini] -= tokens }
+        for (day, tokens) in byDay { counted[day, default: DayTokens()][.gemini] += tokens }
+        sessions[transcript.key] = byDay
+        return data.count
+    }
+
+    private struct GeminiSession: Decodable {
+        struct Message: Decodable {
+            let id: String?
+            let timestamp: String?
+            let model: String?
+            let tokens: Tokens?
+        }
+        /// `thoughts` (reasoning) and `tool` (tool-use prompts) are counted apart from `input` and `output`.
+        struct Tokens: Decodable {
+            let input: Int?
+            let output: Int?
+            let cached: Int?
+            let thoughts: Int?
+            let tool: Int?
+            let total: Int?
+
+            var count: TokenCount {
+                var input = max(0, self.input ?? 0)
+                let cached = max(0, self.cached ?? 0), output = max(0, self.output ?? 0)
+                let thoughts = max(0, self.thoughts ?? 0), tool = max(0, self.tool ?? 0)
+                if cached > 0, total == input + output + thoughts + tool { input = max(0, input - cached) }
+                return TokenCount(input: input + tool, cached: cached, output: output + thoughts)
+            }
+        }
+        let startTime: String?
+        let messages: [Message]?
+    }
+
+    private struct MuseLine: Decodable {
+        struct Stream: Decodable {
+            let id: String?
+        }
+        struct Payload: Decodable {
+            let event: Event?
+        }
+        struct Event: Decodable {
+            let kind: String?
+            let model: String?
+            let usage: Usage?
+        }
+        /// Muse counts cached input inside the input, and reasoning inside the output.
+        struct Usage: Decodable {
+            let input_tokens: Int?
+            let output_tokens: Int?
+            let cached_tokens: Int?
+            let cache_read_tokens: Int?
+            let cache_write_tokens: Int?
+        }
+        let stream: Stream?
+        let sequence: Int?
+        let recorded_at: Int?  // microseconds since 1970
+        let payload_type: String?
+        let payload: Payload?
+    }
+
+    /// One `model_completed` event: one model call. A parent session's `workflow_child_lifecycle` totals repeat its
+    /// subagents' calls, which their own logs count, so they are left out.
+    private func countMuse(_ line: Data) {
+        guard let entry = try? decoder.decode(MuseLine.self, from: line), entry.payload_type == "runtime.session",
+              let event = entry.payload?.event, event.kind == "model_completed", let usage = event.usage,
+              let recorded = entry.recorded_at
+        else { return }
+        let time = recorded >= 1_000_000_000_000_000 ? recorded / 1_000_000  // microseconds
+            : recorded >= 1_000_000_000_000 ? recorded / 1000  // milliseconds
+            : recorded
+        guard time >= 1_000_000_000 else { return }
+        let input = max(0, usage.input_tokens ?? 0), output = max(0, usage.output_tokens ?? 0)
+        let cached = min(max(0, usage.cache_read_tokens ?? usage.cached_tokens ?? 0), input)
+        let tokens = TokenCount(input: input - cached + max(0, usage.cache_write_tokens ?? 0), cached: cached, output: output)
+        if let session = entry.stream?.id, let sequence = entry.sequence {  // an event written twice counts once
+            var hasher = Hasher()
+            hasher.combine("muse")
+            hasher.combine(session)
+            hasher.combine(sequence)
+            guard seen.insert(hasher.finalize()).inserted else { return }
+        }
+        add(tokens, .muse, at: time)
+    }
+
     private func add(_ tokens: TokenCount, _ agent: Agent, at time: Int) {
         guard tokens.total > 0 else { return }
-        // This Mac's UTC offset, looked up once per quarter-hour of the logs: offsets change on quarter-hours.
+        counted[day(of: time), default: DayTokens()][agent] += tokens
+    }
+
+    /// The local day of a time in the logs. This Mac's UTC offset is looked up once per quarter-hour of them: offsets
+    /// change on quarter-hours.
+    private func day(of time: Int) -> Int {
         let block = LocalDay.floorDiv(time, 900)
         if block != zoneBlock {
             zoneBlock = block
             zoneOffset = TimeZone.current.secondsFromGMT(for: Date(timeIntervalSince1970: Double(block * 900)))
         }
-        let day = LocalDay.floorDiv(time + zoneOffset, 86_400)
-        switch agent {
-        case .claude: counted[day, default: DayTokens()].claude = counted[day, default: DayTokens()].claude + tokens
-        case .codex: counted[day, default: DayTokens()].codex = counted[day, default: DayTokens()].codex + tokens
-        }
+        return LocalDay.floorDiv(time + zoneOffset, 86_400)
     }
 
     // MARK: the history file
@@ -700,43 +876,47 @@ final class TokensService {
     static func watch(_ cfg: Config.Tokens) async {
         let scanner = TokenScanner(cfg)
         let number = IntegerFormatStyle<Int>().locale(Locale(identifier: "en_US"))
+        func agents(_ day: DayTokens) -> String {
+            TokenAgent.allCases.filter { day[$0].total > 0 }.map { "  \($0.rawValue) \(day[$0].total.formatted(number))" }.joined()
+        }
         var last: DayTokens?
         print("Counting today's tokens every 10 s, as the tokens page does while it shows. Control-C stops.")
         while !Task.isCancelled {
             let today = await scanner.refresh(save: false).on(LocalDay.of(Date()))
             if let before = last, today != before {
                 print("\(Date().formatted(date: .omitted, time: .standard))  today \(today.total.formatted(number))"
-                    + "  (+\((today.total - before.total).formatted(number)))  claude \(today.claude.total.formatted(number))"
-                    + "  codex \(today.codex.total.formatted(number))")
+                    + "  (+\((today.total - before.total).formatted(number)))" + agents(today))
             } else if last == nil {
-                print("today \(today.total.formatted(number))  claude \(today.claude.total.formatted(number))"
-                    + "  codex \(today.codex.total.formatted(number))")
+                print("today \(today.total.formatted(number))" + agents(today))
             }
             last = today
             try? await Task.sleep(for: .seconds(10))
         }
     }
 
-    /// `deskdash tokens`: each day with any use, oldest first, then what the tokens page shows.
+    /// `deskdash tokens`: each day with any use, oldest first, with a column for each agent that has any, then what the
+    /// tokens page shows.
     static func report(_ cfg: Config.Tokens) async -> String {
         let history = await TokenScanner(cfg).refresh(save: false)
         let today = LocalDay.of(Date())
         let number = IntegerFormatStyle<Int>().locale(Locale(identifier: "en_US"))
-        func column(_ n: Int, _ width: Int) -> String {
-            let text = n.formatted(number)
-            return String(repeating: " ", count: max(0, width - text.count)) + text
+        func column(_ text: String, _ width: Int = 16) -> String {
+            String(repeating: " ", count: max(0, width - text.count)) + text
         }
-        var lines = ["date                 claude           codex           total      new input          cached          output"]
+        let agents = TokenAgent.allCases.filter { agent in history.days.values.contains { $0[agent].total > 0 } }
+        var lines = ["date      " + agents.map { column($0.rawValue) }.joined() + column("total") + column("new input")
+            + column("cached") + column("output")]
         for day in history.days.keys.sorted() {
             let d = history.on(day)
             guard d.total > 0 else { continue }
-            lines.append(LocalDay.key(day) + column(d.claude.total, 17) + column(d.codex.total, 16)
-                + column(d.total, 16) + column(d.all.input, 15) + column(d.all.cached, 16) + column(d.all.output, 16))
+            lines.append(LocalDay.key(day) + agents.map { column(d[$0].total.formatted(number)) }.joined()
+                + [d.total, d.all.input, d.all.cached, d.all.output].map { column($0.formatted(number)) }.joined())
         }
         let streak = history.streak(through: today)
         lines.append("")
         lines.append("today \(Fmt.tokens(history.on(today).total)) · 7 days \(Fmt.tokens(history.sum(today - 6...today).total))"
-            + " · 30 days \(Fmt.tokens(history.sum(today - 29...today).total)) · streak \(streak) day\(streak == 1 ? "" : "s")")
+            + " · 30 days \(Fmt.tokens(history.sum(today - 29...today).total)) · all time \(Fmt.tokens(history.allTime))"
+            + " · streak \(streak) day\(streak == 1 ? "" : "s")")
         return lines.joined(separator: "\n")
     }
 }

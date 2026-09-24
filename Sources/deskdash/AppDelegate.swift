@@ -522,6 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         dash.tick()
         dash.stillFrame = true
+        dash.brightnessPreview = 1  // a picture of the page, not of the night: full brightness whatever the hour
         if options.only.contains("telegram"), let channel = dash.config.telegram.channels.first,
            let post = await TelegramService.latest(channel) {
             dash.notify([post])
