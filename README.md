@@ -26,6 +26,7 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
 
 - **Clock**: time, date, and the indoor temperature and humidity from a Dyson purifier (see [Climate](#climate-the-dyson-purifier)). Without one, outdoor readings for your city from [Open-Meteo](https://open-meteo.com) (no key, refreshed every 15 min). Along the bottom, this Mac's own load, in small versions of the Climate page's 10-segment bars:
   - **CPU**: amber from 70%, red from 90%.
+  - **Temp**: the CPU cores' average temperature, a segment per 10 °C (see [System stats](#system-stats)). Colored by macOS's thermal pressure (green nominal, amber fair, red serious or critical) rather than by degrees, because Apple silicon runs its cores past 90 °C under load by design. It's in °F when the weather is. Macs without the sensors, such as Intel ones, leave it out.
   - **RAM**: colored by macOS's memory pressure (green normal, amber warning, red critical) rather than by how full it is, because macOS keeps memory full on purpose.
   - **SSD**: space used, counting purgeable files as free the way Finder does. Amber from 80%, red from 90%.
   - **Network**: download and upload rates over Ethernet and Wi-Fi.
@@ -95,6 +96,10 @@ The clock page reads this Mac's load from the kernel every 2 s, and the numbers 
 - **Network**: the 64-bit byte counters of the `en*` interfaces. VPN tunnels are left out, because their traffic also crosses Ethernet or Wi-Fi.
 
 All of that costs well under a millisecond. The SSD's free space goes through macOS's purgeable-space service and takes 6 to 40 ms, so it's read once a minute, off the main thread. `"stats": { "enabled": false }` removes the row and stops the sampling.
+
+**Temperature.** macOS has no public API for it, so it comes from the SMC, the controller that runs the Mac's fans and power. Any app can read the SMC through IOKit's public calls, without root or a permission prompt, and temperature monitors read it the same way. deskdash only reads it, never writes. Its sensors have undocumented four-letter names. deskdash averages the ones on the CPU cores, `Tp…` on the performance cores and `Te…` on the efficiency cores, 30 of them on an M6 Mac mini. Finding them takes 5 to 16 ms, once. A read then waits 3 to 6 ms on the SMC, under a millisecond of it CPU time, so it runs every 5 s, off the main thread.
+
+The color comes from macOS's thermal pressure, not the degrees. On that M6 under load, the hottest core reached 96 °C and the average 72 °C, while the pressure stayed nominal and the fan turned at 2,300 of its 4,900 rpm.
 
 ## How agent status works
 

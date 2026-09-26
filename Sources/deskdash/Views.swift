@@ -54,6 +54,14 @@ enum Theme {
         case .critical: down
         }
     }
+
+    static func color(_ thermal: ProcessInfo.ThermalState) -> Color {
+        switch thermal {
+        case .nominal: up
+        case .fair: waiting
+        default: down  // serious (fans at full speed) or critical (the chip slowed down to cool)
+        }
+    }
 }
 
 struct RootView: View {
@@ -193,7 +201,7 @@ struct ClockPage: View {
                     .padding(.bottom, stats == nil ? 0 : 26)
             }
             if let stats {
-                StatsRow(stats: stats)
+                StatsRow(stats: stats, fahrenheit: dash.config.weather.fahrenheit)
                     .padding(.horizontal, 64)
             }
         }
@@ -204,10 +212,12 @@ struct ClockPage: View {
 
 /// The Mac's load along the bottom of the clock page, in the Climate page's segment bars laid on their side.
 /// CPU turns amber at 70% and red at 90%, the SSD at 80% and 90%. Memory takes its color from macOS's memory
-/// pressure rather than from how full it is, since macOS keeps memory full on purpose. Every column has a fixed
-/// width, so changing numbers never shift the row.
+/// pressure rather than from how full it is, since macOS keeps memory full on purpose, and the temperature from
+/// macOS's thermal pressure rather than from degrees, since Apple silicon runs its cores past 90 °C on purpose. Its
+/// bar is a segment per 10 °C. Every column has a fixed width, so changing numbers never shift the row.
 struct StatsRow: View {
     let stats: SystemStats
+    let fahrenheit: Bool
 
     var body: some View {
         let cpu = stats.cpu.map { ($0 * 100).rounded() / 100 }  // the color follows the number shown
@@ -216,6 +226,11 @@ struct StatsRow: View {
             StatMeter(label: "CPU", value: cpu.map(Fmt.wholePercent), unit: "%", fraction: cpu,
                       color: Theme.quality(cpu, fair: 0.7, poor: 0.9))
             Spacer(minLength: 20)
+            if let celsius = stats.temperature {
+                StatMeter(label: "TEMP", value: Fmt.degrees(celsius, fahrenheit: fahrenheit), unit: "°",
+                          fraction: celsius / 100, color: Theme.color(stats.thermal))
+                Spacer(minLength: 20)
+            }
             StatMeter(label: "RAM", value: Fmt.gigabytes(stats.memoryUsed), unit: "GB", fraction: stats.memory,
                       color: Theme.color(stats.pressure))
             Spacer(minLength: 20)
@@ -242,6 +257,7 @@ struct StatMeter: View {
                     .font(Theme.font(28, .heavy))
                     .tracking(2)
                     .foregroundStyle(Theme.secondary)
+                    .fixedSize()
                 Spacer(minLength: 8)
                 Text(value ?? "–")
                     .font(Theme.font(46, .bold))
@@ -251,14 +267,16 @@ struct StatMeter: View {
                     Text(unit)
                         .font(Theme.font(30, .bold))
                         .foregroundStyle(color)
-                        .padding(.leading, unit == "%" ? 2 : 6)
+                        .padding(.leading, unit == "GB" ? 6 : 2)  // a word keeps a space, a sign hugs the number
+                        .baselineOffset(unit == "°" ? 11 : 0)  // up to the digits' tops, where a degree sign sits
                 }
             }
             .lineLimit(1)
-            SegmentBar(lit: lit, color: color, horizontal: true, segment: CGSize(width: 18, height: 26), spacing: 5,
+            .minimumScaleFactor(0.8)  // a rare wide value, such as 128 GB, shrinks a little rather than truncating
+            SegmentBar(lit: lit, color: color, horizontal: true, segment: CGSize(width: 16, height: 26), spacing: 5,
                        corner: 4)
         }
-        .frame(width: 225)
+        .frame(width: 205)
     }
 
     /// In proportion; anything above zero lights at least one segment.
@@ -1111,7 +1129,12 @@ enum Fmt {
     }
 
     static func temperature(_ celsius: Double, fahrenheit: Bool, decimals: Int) -> String {
-        String(format: "%.\(decimals)f°", fahrenheit ? celsius * 9 / 5 + 32 : celsius)
+        degrees(celsius, fahrenheit: fahrenheit, decimals: decimals) + "°"
+    }
+
+    /// The number alone, for a meter that draws its ° smaller.
+    static func degrees(_ celsius: Double, fahrenheit: Bool, decimals: Int = 0) -> String {
+        String(format: "%.\(decimals)f", fahrenheit ? celsius * 9 / 5 + 32 : celsius)
     }
 
     /// About five significant digits: 86,276 · 2,743.9 · 118.19 · 97.01 · 0.2165

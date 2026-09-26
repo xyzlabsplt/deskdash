@@ -54,7 +54,7 @@
     "pollSeconds": 20,              // how often to check for new posts (about 5 KB per check)
   },
   "stats": {
-    "enabled": true,                // CPU, memory, SSD and network meters along the bottom of the clock page
+    "enabled": true,                // CPU, temperature, memory, SSD and network meters along the bottom of the clock page
   },
   "music": {                        // what Music or Spotify plays on this Mac; the Now Playing page is "music" in pages.order
     "onClock": true,                // a line on the clock page while something plays

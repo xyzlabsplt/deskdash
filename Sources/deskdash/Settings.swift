@@ -161,7 +161,7 @@ private struct GeneralSettings: View {
             }
             Section("Clock") {
                 Toggle("24-hour clock", isOn: model.setting(\.clock.use24h))
-                Toggle("CPU, memory, SSD and network along the bottom", isOn: model.setting(\.stats.enabled))
+                Toggle("CPU, temperature, memory, SSD and network along the bottom", isOn: model.setting(\.stats.enabled))
                 Toggle("What's playing in Music or Spotify", isOn: model.setting(\.music.onClock))
                 LabeledContent("Time zone") {
                     HStack {

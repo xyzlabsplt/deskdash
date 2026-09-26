@@ -109,7 +109,7 @@ struct Config: Codable, Equatable, Sendable {
     }
 
     struct Stats: Codable, Equatable, Sendable {
-        /// CPU, memory, SSD and network meters along the bottom of the clock page.
+        /// CPU, temperature, memory, SSD and network meters along the bottom of the clock page.
         var enabled = true
     }
 

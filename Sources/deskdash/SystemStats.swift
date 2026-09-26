@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import IOKit
 
 /// The Mac's own load, for the row of meters on the clock page.
 struct SystemStats: Equatable, Sendable {
@@ -9,6 +10,8 @@ struct SystemStats: Equatable, Sendable {
     }
 
     var cpu: Double?  // share of all cores busy since the previous sample, 0...1
+    var temperature: Double?  // the CPU cores' average in °C; nil on a Mac without the sensors (CPUTemperature)
+    var thermal: ProcessInfo.ThermalState  // macOS's thermal pressure, which colors the temperature
     var memoryUsed: Double  // bytes in active, wired and compressed pages
     var memoryTotal: Double
     var pressure: Pressure
@@ -18,14 +21,15 @@ struct SystemStats: Equatable, Sendable {
 
     var memory: Double { memoryTotal > 0 ? memoryUsed / memoryTotal : 0 }
 
-    static let demo = SystemStats(cpu: 0.23, memoryUsed: 13.4 * 1_073_741_824, memoryTotal: 24 * 1_073_741_824,
-                                  pressure: .normal, diskUsed: 0.48, download: 1_240_000, upload: 310_000)
+    static let demo = SystemStats(cpu: 0.23, temperature: 51, thermal: .nominal, memoryUsed: 13.4 * 1_073_741_824,
+                                  memoryTotal: 24 * 1_073_741_824, pressure: .normal, diskUsed: 0.48,
+                                  download: 1_240_000, upload: 310_000)
 }
 
 /// Samples the Mac's load on every other clock tick, so new numbers reach the screen with the tick's own redraw.
 /// CPU, memory and network come straight from the kernel (Mach host statistics and sysctl), well under a
 /// millisecond together. The SSD's free space goes through the CacheDelete service, 6-40 ms a call, so it is
-/// read once a minute off the main thread.
+/// read once a minute off the main thread, and the CPU's temperature, which waits on the SMC for 3-6 ms, every 5 s.
 @MainActor
 final class SystemStatsService {
     private let dash: Dashboard
@@ -37,6 +41,8 @@ final class SystemStatsService {
     private var netSampled: TimeInterval?
     private var diskUsed: Double?
     private var diskTask: Task<Void, Never>?
+    private var temperature: Double?
+    private var temperatureTask: Task<Void, Never>?
 
     init(dash: Dashboard) {
         self.dash = dash
@@ -49,6 +55,7 @@ final class SystemStatsService {
         guard cfg.enabled != enabled else { return }
         enabled = cfg.enabled
         diskTask?.cancel()
+        temperatureTask?.cancel()
         cpuTicks = nil
         netSampled = nil
         guard enabled else {
@@ -60,6 +67,12 @@ final class SystemStatsService {
             while !Task.isCancelled {
                 diskUsed = await Task.detached(priority: .utility) { Self.readDisk() }.value
                 try? await Task.sleep(for: .seconds(60))
+            }
+        }
+        temperatureTask = Task {
+            while !Task.isCancelled {
+                temperature = await Task.detached(priority: .utility) { CPUTemperature.shared?.read() }.value
+                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
@@ -75,6 +88,7 @@ final class SystemStatsService {
         apply(dash.config.stats)
         guard enabled else { return }
         diskUsed = Self.readDisk()
+        temperature = CPUTemperature.shared?.read()
         try? await Task.sleep(for: .seconds(1))
         sample()
     }
@@ -114,7 +128,8 @@ final class SystemStatsService {
         netSampled = now
 
         let pages = UInt64(vm.active_count) + UInt64(vm.wire_count) + UInt64(vm.compressor_page_count)
-        return SystemStats(cpu: cpu, memoryUsed: Double(pages) * pageSize,
+        return SystemStats(cpu: cpu, temperature: temperature, thermal: ProcessInfo.processInfo.thermalState,
+                           memoryUsed: Double(pages) * pageSize,
                            memoryTotal: Double(ProcessInfo.processInfo.physicalMemory),
                            pressure: SystemStats.Pressure(rawValue: level) ?? .normal, diskUsed: diskUsed,
                            download: download, upload: upload)
@@ -186,5 +201,91 @@ final class SystemStatsService {
               let free = values.volumeAvailableCapacityForImportantUsage
         else { return nil }
         return min(1, max(0, 1 - Double(free) / Double(total)))
+    }
+}
+
+// MARK: temperature
+
+/// The CPU's temperature, from the sensors on its cores. macOS publishes no temperature API, but the SMC, the
+/// controller that runs the fans and power, answers any process through IOKit's public calls, and temperature
+/// monitors read it that way. Its keys are undocumented four-letter codes. On Apple silicon the float keys named
+/// `Tp…` sit on the performance cores and `Te…` on the efficiency cores, 30 of them on an M6. Finding them lists
+/// the SMC's 2,000-odd keys once, 5-16 ms. A read then waits on the SMC 0.1-0.2 ms a sensor, 3-6 ms in all, of
+/// which under a millisecond is CPU. The connection stays open for the life of the process.
+struct CPUTemperature: Sendable {
+    /// Found on first use; nil on a Mac without the sensors, such as an Intel one.
+    static let shared = open()
+
+    private let connection: io_connect_t
+    private let keys: [UInt32]
+
+    /// The sensors' average in °C, leaving out any that reads nothing.
+    func read() -> Double? {
+        let values = keys.compactMap { Self.value(connection, $0) }
+        return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func open() -> CPUTemperature? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        var connection: io_connect_t = 0
+        guard IOServiceOpen(service, mach_task_self_, 0, &connection) == KERN_SUCCESS else { return nil }
+        let total = call(connection, readKey, key: code("#KEY"), size: 4)  // how many keys there are, big-endian
+        let count = total.map { UInt32(bigEndian: word($0, at: 48)) } ?? 0
+        let cores = [code("Tp"), code("Te")], float = code("flt ")
+        var keys: [UInt32] = []
+        for index in 0..<count {
+            guard let key = call(connection, keyAtIndex, index: index).map({ word($0, at: 0) }),
+                  cores.contains(key >> 16),
+                  let info = call(connection, keyInfo, key: key),
+                  word(info, at: 28) == 4, word(info, at: 32) == float,  // 4 bytes, a Float32
+                  value(connection, key) != nil
+            else { continue }
+            keys.append(key)
+        }
+        guard !keys.isEmpty else {
+            IOServiceClose(connection)
+            return nil
+        }
+        return CPUTemperature(connection: connection, keys: keys)
+    }
+
+    /// A sensor's reading in °C, or nil when it reads 0, as the SMC's unused sensors do, or nonsense.
+    private static func value(_ connection: io_connect_t, _ key: UInt32) -> Double? {
+        guard let reply = call(connection, readKey, key: key, size: 4) else { return nil }
+        let celsius = Double(reply.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 48, as: Float32.self) })
+        return celsius > 0 && celsius < 150 ? celsius : nil
+    }
+
+    private static let readKey: UInt8 = 5, keyAtIndex: UInt8 = 8, keyInfo: UInt8 = 9
+
+    /// One request to the SMC, through its user client's single method (2). Request and reply are each an
+    /// SMCKeyData_t, 80 bytes, set and read here at its C offsets: the key at 0, the value's size and type at 28 and
+    /// 32, the SMC's result at 40, the command at 42, a key index at 44, and the value's bytes from 48.
+    private static func call(_ connection: io_connect_t, _ command: UInt8, key: UInt32 = 0, index: UInt32 = 0,
+                             size: UInt32 = 0) -> [UInt8]? {
+        var request = [UInt8](repeating: 0, count: 80)
+        request.withUnsafeMutableBytes {
+            $0.storeBytes(of: key, toByteOffset: 0, as: UInt32.self)
+            $0.storeBytes(of: size, toByteOffset: 28, as: UInt32.self)
+            $0[42] = command
+            $0.storeBytes(of: index, toByteOffset: 44, as: UInt32.self)
+        }
+        var reply = [UInt8](repeating: 0, count: 80)
+        var length = reply.count
+        guard IOConnectCallStructMethod(connection, 2, request, request.count, &reply, &length) == kIOReturnSuccess,
+              reply[40] == 0
+        else { return nil }
+        return reply
+    }
+
+    private static func word(_ reply: [UInt8], at offset: Int) -> UInt32 {
+        reply.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) }
+    }
+
+    /// "Tp05" → 0x54703035, a key's characters as the SMC packs them.
+    private static func code(_ name: String) -> UInt32 {
+        name.utf8.reduce(0) { $0 << 8 | UInt32($1) }
     }
 }
