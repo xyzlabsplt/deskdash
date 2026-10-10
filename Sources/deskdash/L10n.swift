@@ -62,6 +62,7 @@ enum L10n {
         // pages
         "NEEDS YOU": "需要你", "WORKING": "工作中", "DONE": "完成", "IDLE": "閒置",
         "LEFT  5H": "5 小時內剩餘", "LEFT  WEEK": "本週剩餘",
+        "NO 5-HOUR LIMIT": "沒有 5 小時限制", "NO WEEKLY LIMIT": "沒有每週限制",
         "TODAY": "今天", "7 DAYS": "7 天", "30 DAYS": "30 天", "ALL TIME": "累計", "STREAK": "連續",
         "TEMP": "溫度", "OUTSIDE": "戶外",
         "Sensors are off: turn on Continuous Monitoring in the Dyson app": "感測器已關閉：請在 Dyson App 開啟「持續監測」",

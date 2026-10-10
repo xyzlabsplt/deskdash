@@ -1037,14 +1037,21 @@ struct AlertBanner: View {
 /// Each agent's plan limits side by side: what is left of the 5-hour window large, the week under it. Each bar has a
 /// white tick where an even pace would leave it, so a bar reaching past its tick has room to spare. Amber means it
 /// runs out before it resets at the pace so far, or is nearly gone; red, almost nothing is left.
+/// Each agent's plan limits in a column, in the same rows for every agent: the 5-hour window, then the week, all at one
+/// size, so the same window sits side by side. A window an agent's plan does not have (Codex Pro has only the week)
+/// leaves its place, marked; a row no agent has is left out. Each bar has a white tick where an even pace would leave
+/// it, so a bar reaching past its tick has room to spare. Amber means it runs out before it resets at the pace so far,
+/// or is nearly gone; red, almost nothing is left.
 struct LimitsPage: View {
     let dash: Dashboard
 
     var body: some View {
+        let shown = Array(dash.visibleLimits.prefix(2))
+        let rows = LimitRow.allCases.filter { row in shown.contains { row.window(of: $0) != nil } }
         HStack(alignment: .top, spacing: 72) {
-            let shown = dash.visibleLimits.prefix(2)
             ForEach(shown) {
-                LimitsColumn(limits: $0, now: dash.now, use24h: dash.config.clock.use24h, solo: shown.count == 1)
+                LimitsColumn(limits: $0, rows: rows, now: dash.now, use24h: dash.config.clock.use24h,
+                             size: shown.count == 1 ? 180 : rows.count == 1 ? 150 : 120)
             }
         }
         .padding(.horizontal, 56)
@@ -1054,11 +1061,26 @@ struct LimitsPage: View {
     }
 }
 
+enum LimitRow: CaseIterable {
+    case session, week
+
+    func window(of limits: AgentLimits) -> UsageWindow? {
+        switch self {
+        case .session: limits.session
+        case .week: limits.week
+        }
+    }
+
+    var caption: String { L10n.t(self == .session ? "LEFT  5H" : "LEFT  WEEK") }
+    var missing: String { L10n.t(self == .session ? "NO 5-HOUR LIMIT" : "NO WEEKLY LIMIT") }
+}
+
 struct LimitsColumn: View {
     let limits: AgentLimits
+    let rows: [LimitRow]
     let now: Date
     let use24h: Bool
-    var solo = false  // the only column: the figures grow into the room
+    let size: CGFloat
 
     var body: some View {
         let age = now.timeIntervalSince(limits.updated)
@@ -1070,28 +1092,31 @@ struct LimitsColumn: View {
                     TokenCaption(text: L10n.ago(Fmt.duration(age)))
                 }
             }
-            // The first window large, the second under it. A plan with one window (Codex Pro has only the week)
-            // shows that one large, in the middle of the column.
-            let windows = [(L10n.t("LEFT  5H"), limits.session), (L10n.t("LEFT  WEEK"), limits.week)]
-                .compactMap { c, w in w.map { (c, $0) } }
-            let first: CGFloat = solo ? 200 : 150
-            if windows.count == 1 { Spacer(minLength: 0) }
-            ForEach(Array(windows.enumerated()), id: \.offset) { index, item in
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 if index > 0 {
-                    Spacer(minLength: 18)
                     Rectangle().fill(Theme.faint).frame(height: 2)
-                    Spacer(minLength: 6)
                 }
-                LimitFigure(window: item.1, now: now, caption: item.0, size: index == 0 ? first : 110)
-                    .padding(.top, index == 0 ? -first / 9 : 0)
-                    .padding(.bottom, index == 0 ? -4 : 0)
-                LimitBar(window: item.1, now: now)
-                    .frame(height: 22)
-                    .padding(.top, index == 0 ? 0 : 4)
-                LimitNote(window: item.1, now: now, use24h: use24h)
-                    .padding(.top, 14)
+                // Every row the same height in every column, so the rows line up across the page.
+                Group {
+                    if let window = row.window(of: limits) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            LimitFigure(window: window, now: now, caption: row.caption, size: size)
+                                .padding(.top, -size / 9)
+                                .padding(.bottom, -4)
+                            LimitBar(window: window, now: now)
+                                .frame(height: 22)
+                            LimitNote(window: window, now: now, use24h: use24h)
+                                .padding(.top, 14)
+                        }
+                    } else {
+                        TokenCaption(text: row.missing)
+                            .foregroundStyle(Theme.faint)
+                            .padding(.top, size / 3)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: rows.count == 1 ? .leading : .topLeading)
+                .padding(.vertical, 10)
             }
-            if windows.count == 1 { Spacer(minLength: 40) }
         }
         .lineLimit(1)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
