@@ -12,13 +12,14 @@ One native Swift binary, no dependencies, about 1 KB/s of network, nothing liste
 
 The pages rotate every 12 s (the clock gets 15 s). Click the dashboard for the next page. Clicks do not take focus from the app you are working in.
 
-**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has six tabs:
+**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has seven tabs:
 
-- **General**: which screen, which pages rotate and for how long, what the clock page shows (12/24-hour, system stats, the playing track), the Now Playing takeover and covers, the keep-awake schedule, and the brightness by day and at night.
+- **General**: the language, which screen, keeping the dock screen from being the main display (see [When the dock screen is the main display](#when-the-dock-screen-is-the-main-display)), which pages rotate and for how long, what the clock page shows (12/24-hour, system stats, the playing track), the Now Playing takeover and covers, the keep-awake schedule, and the brightness by day and at night.
 - **Weather & Time**: search for your city (Open-Meteo, no key). Until you choose one there is no weather. Optionally the clock follows that place's time zone, and the clock page then names the city.
+- **Photos**: an album from the Photos app, picked from a list, or a folder, and how the pictures show.
 - **Markets**: add, reorder, or remove Hyperliquid symbols, each checked against Hyperliquid's list.
 - **Telegram**: add or remove public channels, each checked through its public preview, and preview a channel's newest post on the dock screen.
-- **Agents**: the alert behavior, the weeks in the token heatmap, and the command that installs the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
+- **Agents**: the alert behavior, the sounds (each with a play button) and the card, the low-limit alert, the weeks in the token heatmap, and the commands that install the Claude status line and the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
 
 Changes apply at once and are saved to `config.json`, writing only what differs from the defaults. `deskdash config` prints that.
 

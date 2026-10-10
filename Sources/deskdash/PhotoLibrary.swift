@@ -58,7 +58,9 @@ enum PhotoLibrary {
         return Photo(id: PhotoRef.asset(id).id, image: image, backdrop: backdrop, taken: taken)
     }
 
+    /// Only deskdash.app asks: a bare binary (snapshots, the CLI) would be asking on behalf of Terminal.
     private static func authorized() async -> Bool {
+        guard Bundle.main.bundleIdentifier != nil else { return false }
         switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
         case .authorized, .limited: return true
         case .notDetermined:
