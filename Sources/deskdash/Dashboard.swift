@@ -64,6 +64,10 @@ final class Dashboard {
     var photo: Photo?
     /// The Mac's sound is muted or all the way down while sounds are on: shown, since no chime would be heard.
     var soundSilent = false
+    /// The dock screen is black: nobody has used the Mac for `schedule.idleMinutes`, or it is sleep hours
+    /// (`schedule.sleep`). Only the running dashboard decides it (`managesScreen`); snapshots never go black.
+    private(set) var screenOff = false
+    @ObservationIgnored var managesScreen = false
     /// Claude Code's and Codex's tokens by day; nil while the tokens page is off.
     var tokens: TokenHistory?
     /// The token heatmap's top row, as Calendar's weekday (1 is Sunday); nil follows this Mac's calendar.
@@ -134,6 +138,10 @@ final class Dashboard {
     func tick() {
         now = Date()
         if let until = doneFlashUntil, now >= until { doneFlashUntil = nil }
+        if managesScreen {
+            let off = sleepingNow || idleNow && !alertUp
+            if off != screenOff { screenOff = off }
+        }
         if card != nil, !config.alerts.card || cardFor.map(stillOn) == false { dismissCard() }
         chime.tick(config.alerts, quiet: quietNow) { kind in
             switch kind {
@@ -361,6 +369,18 @@ final class Dashboard {
         let level = brightnessPreview ?? (night ? config.schedule.dimBrightness : config.schedule.dayBrightness)
         return min(1, max(0.05, level))
     }
+
+    /// Sleep hours: the dock screen stays black, alerts or not.
+    var sleepingNow: Bool { DailyWindow(config.schedule.sleep)?.contains(now) ?? false }
+
+    /// Nobody has touched the keyboard or mouse for `schedule.idleMinutes`.
+    private var idleNow: Bool {
+        config.schedule.idleMinutes > 0 && Chime.idleSeconds >= config.schedule.idleMinutes * 60
+    }
+
+    /// Something the dashboard is showing for you, which lights a screen gone black for idleness: a session waiting,
+    /// one just finished, an alert card, a chime still ringing.
+    private var alertUp: Bool { anyWaiting || doneFlash || card != nil || chime.ringing != nil }
 
     /// No sounds in the night window, when `alerts.quietAtNight` is on.
     var quietNow: Bool {

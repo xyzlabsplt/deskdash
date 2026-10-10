@@ -66,6 +66,9 @@ enum L10n {
         "TEMP": "溫度", "OUTSIDE": "戶外",
         "Sensors are off: turn on Continuous Monitoring in the Dyson app": "感測器已關閉：請在 Dyson App 開啟「持續監測」",
         // Settings
+        "Turn the dock screen off when the Mac is unused for": "Mac 閒置多久後關閉擴充座螢幕",
+        "Sleep hours": "休眠時間",
+        "The dock screen goes black when no one has used the keyboard or mouse for that long, and comes back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep.": "鍵盤滑鼠閒置超過設定時間，擴充座螢幕就會變全黑；一有操作或 AI 提醒就會亮起。休眠時間內螢幕固定全黑，有提醒也不亮，螢幕也可以進入睡眠。",
         "Sources": "資料來源",
         "Claude Code sessions": "Claude Code 工作階段",
         "Codex sessions": "Codex 工作階段",

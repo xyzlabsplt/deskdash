@@ -171,6 +171,12 @@ struct Config: Codable, Equatable, Sendable {
         var dim = "23:00-08:00"
         var dimBrightness = 0.35
         var dayBrightness = 1.0
+        /// Turn the dock screen black after this many minutes without keyboard or mouse input; any input, or an alert,
+        /// brings it back. 0 never does.
+        var idleMinutes = 0.0
+        /// "HH:MM-HH:MM": sleep hours, when the dock screen stays black whatever happens, and the displays may sleep.
+        /// "" has none.
+        var sleep = ""
     }
 
     struct Alerts: Codable, Equatable, Sendable {
@@ -370,6 +376,8 @@ extension Config.Schedule {
         dim = try c.get(.dim, d.dim)
         dimBrightness = try c.get(.dimBrightness, d.dimBrightness)
         dayBrightness = try c.get(.dayBrightness, d.dayBrightness)
+        idleMinutes = try c.get(.idleMinutes, d.idleMinutes)
+        sleep = try c.get(.sleep, d.sleep)
     }
 }
 

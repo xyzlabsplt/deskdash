@@ -111,6 +111,8 @@ The clock page reads this Mac's load from the kernel every 2 s, and the numbers 
 
 All of that costs well under a millisecond. The SSD's free space goes through macOS's purgeable-space service and takes 6 to 40 ms, so it's read once a minute, off the main thread. `"stats": { "enabled": false }` removes the row and stops the sampling.
 
+**Idle and sleep hours.** Off until you set them in Settings → General → Schedule (`schedule.idleMinutes`, `schedule.sleep`). After that many minutes without keyboard or mouse input, the dock screen goes black, and any input brings it back, as does an alert: a session waiting on you, one finishing, a card, a chime still ringing. In sleep hours (say 23:00 to 08:00) it stays black whatever happens, and deskdash lets go of the keep-awake hold so macOS may sleep the displays. Black is drawn, as the dimming is, and while black the dashboard draws nothing else.
+
 **Temperature.** macOS has no public API for it, so it comes from the SMC, the controller that runs the Mac's fans and power. Any app can read the SMC through IOKit's public calls, without root or a permission prompt, and temperature monitors read it the same way. deskdash only reads it, never writes. Its sensors have undocumented four-letter names. deskdash averages the ones on the CPU cores, `Tp…` on the performance cores and `Te…` on the efficiency cores, 30 of them on an M6 Mac mini. Finding them takes 5 to 16 ms, once. A read then waits 3 to 6 ms on the SMC, under a millisecond of it CPU time, so it runs every 5 s, off the main thread.
 
 The color comes from macOS's thermal pressure, not the degrees. On that M6 under load, the hottest core reached 96 °C and the average 72 °C, while the pressure stayed nominal and the fan turned at 2,300 of its 4,900 rpm.

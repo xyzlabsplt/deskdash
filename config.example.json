@@ -87,6 +87,9 @@
     "dim": "23:00-08:00",           // the night: draw at dimBrightness in this window ("" = never)
     "dimBrightness": 0.35,          // at night
     "dayBrightness": 1,             // the rest of the day (0.05 to 1, drawn over the page, not the backlight)
+    "idleMinutes": 0,               // black after this many minutes without keyboard or mouse input; input or an alert
+                                    // brings it back (0 = never)
+    "sleep": "",                    // sleep hours, e.g. "23:00-08:00": black whatever happens, and the displays may sleep
   },
   "alerts": {                       // when a session needs you, one finishes, or a limit runs low
     "sound": false,                 // play a sound, again until someone uses the keyboard or mouse

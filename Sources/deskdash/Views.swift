@@ -83,6 +83,14 @@ struct Stage: View {
     let dash: Dashboard
 
     var body: some View {
+        if dash.screenOff {
+            Color.black  // nothing else drawn, so a black screen costs nothing
+        } else {
+            stage
+        }
+    }
+
+    private var stage: some View {
         ZStack {
             Color.black
             PageView(dash: dash, page: dash.page)

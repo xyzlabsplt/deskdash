@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // The bundle ID is what macOS's Local Network permission follows; a bare binary has none.
         log("deskdash started as \(Bundle.main.bundleIdentifier ?? "a bare binary, not deskdash.app") (config: \(store.path)"
             + (launchdJob.map { ", launchd job \($0))" } ?? ")"))
+        dash.managesScreen = !options.windowed
         applyConfig()
         agents.start()
         music.start()
@@ -425,7 +426,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// During `schedule.keepAwake` the displays stay on (macOS cannot keep only one display awake).
     private func updateDisplayAssertion() {
-        let want = !options.windowed && dash.keepAwakeNow
+        // Not in sleep hours: then macOS may sleep the displays as usual.
+        let want = !options.windowed && dash.keepAwakeNow && !dash.sleepingNow
         if want, displayAssertion == 0 {
             var id: IOPMAssertionID = 0
             let result = IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString,

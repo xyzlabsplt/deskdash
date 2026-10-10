@@ -269,6 +269,17 @@ private struct GeneralSettings: View {
                 if !draft.schedule.keepAwake.isEmpty {
                     WindowPicker(text: model.setting(\.schedule.keepAwake))
                 }
+                StepSlider(title: L10n.t("Turn the dock screen off when the Mac is unused for"),
+                           value: model.setting(\.schedule.idleMinutes), steps: [0, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120],
+                           format: { $0 == 0 ? L10n.t("Never") : "\(Int($0)) " + L10n.t("min") })
+                Toggle(L10n.t("Sleep hours"), isOn: windowOn(\.sleep, fallback: "23:00-08:00"))
+                if !draft.schedule.sleep.isEmpty {
+                    WindowPicker(text: model.setting(\.schedule.sleep))
+                }
+                Text(L10n.t("The dock screen goes black when no one has used the keyboard or mouse for that long, and comes "
+                    + "back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section(L10n.t("Brightness")) {
                 brightness(draft.schedule.dim.isEmpty ? L10n.t("All day") : L10n.t("Daytime"), \.dayBrightness)
