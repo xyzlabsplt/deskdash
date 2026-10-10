@@ -25,7 +25,7 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
 
 **It never hides your windows.** The dashboard covers the dock screen only while nothing else is on it. When any app's window lands there, the dashboard drops behind all windows within a second, like a desktop picture, and it covers the screen again once that screen is clear. The same happens whenever the dock screen is the main display (the one with the menu bar), because that is where macOS opens new windows and dialogs.
 
-- **Clock**: time, date, and the indoor temperature and humidity from a Dyson purifier (see [Climate](#climate-the-dyson-purifier)). Without one, outdoor readings for your city from [Open-Meteo](https://open-meteo.com) (no key, refreshed every 15 min). Along the bottom, this Mac's own load, in small versions of the Climate page's 10-segment bars:
+- **Clock**: time, date (and the city, when the clock follows a place whose time differs from this Mac's), and the indoor temperature and humidity from a Dyson purifier (see [Climate](#climate-the-dyson-purifier)). Without one, outdoor readings for your city from [Open-Meteo](https://open-meteo.com) (no key, refreshed every 15 min). Along the bottom, this Mac's own load, in small versions of the Climate page's 10-segment bars:
   - **CPU**: amber from 70%, red from 90%.
   - **Temp**: the CPU cores' average temperature, a segment per 10 °C (see [System stats](#system-stats)). Colored by macOS's thermal pressure (green nominal, amber fair, red serious or critical) rather than by degrees, because Apple silicon runs its cores past 90 °C under load by design. It's in °F when the weather is. Macs without the sensors, such as Intel ones, leave it out.
   - **RAM**: colored by macOS's memory pressure (green normal, amber warning, red critical) rather than by how full it is, because macOS keeps memory full on purpose.
@@ -60,7 +60,7 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
 - While sounds are on and the Mac is muted or turned all the way down, a muted-speaker icon shows in the dock screen's top right corner, since no chime would be heard.
 - `deskdash ctl chime waiting` (or `done`, `limit`) plays one and shows its card, whatever the settings, to try them. `deskdash snapshot alert` renders the card.
 
-**Language.** The menus and the alerts (the card, the notification) follow macOS's language: English, or Traditional Chinese on a Mac set to it. `"language": "en"` or `"zh-Hant"` in `config.json` picks one. The pages stay in English, sized as they are.
+**Language.** The pages, menus, alerts and Settings follow macOS's language: English, or Traditional Chinese on a Mac set to it, dates, weekdays and durations included ("10月10日 週六", "1小時41分後重置"). Settings → General → Language, or `"language": "en"` or `"zh-Hant"` in `config.json`, picks one.
 
 **Night.** From 23:00 to 08:00 the dashboard draws at 35% brightness, and at 100% the rest of the day. Settings → General sets both levels. While you drag either slider, the dock screen shows that level, whatever the time, and returns to the schedule's shortly after. The dimming is drawn, as black over the page, because macOS has no public control for this panel's backlight. From 08:00 to 23:00 it keeps the displays from idle-sleeping. macOS can only keep all displays awake, not one, so turn **Keep the displays awake** off in Settings → General if the big monitor should sleep on its own schedule.
 

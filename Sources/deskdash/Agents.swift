@@ -21,10 +21,10 @@ struct AgentSession: Identifiable, Equatable, Comparable, Sendable {
 
         var label: String {
             switch self {
-            case .waiting: "NEEDS YOU"
-            case .working: "WORKING"
-            case .done: "DONE"
-            case .idle: "IDLE"
+            case .waiting: L10n.t("NEEDS YOU")
+            case .working: L10n.t("WORKING")
+            case .done: L10n.t("DONE")
+            case .idle: L10n.t("IDLE")
             }
         }
     }

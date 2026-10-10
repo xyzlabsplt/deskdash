@@ -176,7 +176,7 @@ private struct GeneralSettings: View {
         let draft = model.draft
         Form {
             Section(L10n.t("Language")) {
-                Picker(L10n.t("Menus, alerts and Settings"), selection: model.setting(\.language)) {
+                Picker(L10n.t("Pages, menus, alerts and Settings"), selection: model.setting(\.language)) {
                     Text(L10n.t("Follow macOS")).tag("")
                     Text("English").tag("en")
                     Text("繁體中文").tag("zh-Hant")

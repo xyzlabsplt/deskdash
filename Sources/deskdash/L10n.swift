@@ -1,7 +1,8 @@
 import Foundation
 
-/// The words of deskdash's menus and alerts, in English or Traditional Chinese, by the `language` setting: "" follows
-/// macOS's first preferred language, or "en" or "zh-Hant". The dashboard's pages stay in English, sized as they are.
+/// deskdash's words, on the pages and in the menus, alerts and Settings, in English or Traditional Chinese, by the
+/// `language` setting: "" follows macOS's first preferred language, or "en" or "zh-Hant". Dates and durations follow
+/// it too (`Fmt`).
 /// A dictionary rather than .strings files: deskdash.app is assembled by hand and carries no resource bundle.
 enum L10n {
     nonisolated(unsafe) static var chinese = false
@@ -35,6 +36,12 @@ enum L10n {
 
     static func resetsIn(_ duration: String) -> String { chinese ? "\(duration) 後重置" : "Resets in \(duration)" }
 
+    // MARK: pages
+
+    static func ago(_ duration: String) -> String { chinese ? "\(duration)前" : duration.uppercased() + " AGO" }
+    static func more(_ count: Int) -> String { chinese ? "還有 \(count) 個" : "+\(count) more" }
+    static func days(_ count: Int) -> String { chinese ? "\(count) 天" : count == 1 ? "1 day" : "\(count) days" }
+
     static func menuHeader(page: String, screen: String) -> String {
         chinese ? "deskdash：\(t(page))（\(screen)）" : "deskdash: \(page) on \(screen)"
     }
@@ -52,6 +59,12 @@ enum L10n {
         "An agent": "有個 AI 代理", "A plan limit is running low": "方案用量快用完了",
         "A preview of deskdash's alert": "deskdash 提醒預覽", "CLICK TO DISMISS": "點一下關閉", "Close": "關閉",
         "permission prompt": "等你允許權限", "input needed": "等你回覆",
+        // pages
+        "NEEDS YOU": "需要你", "WORKING": "工作中", "DONE": "完成", "IDLE": "閒置",
+        "LEFT  5H": "5 小時內剩餘", "LEFT  WEEK": "本週剩餘",
+        "TODAY": "今天", "7 DAYS": "7 天", "30 DAYS": "30 天", "ALL TIME": "累計", "STREAK": "連續",
+        "TEMP": "溫度", "OUTSIDE": "戶外",
+        "Sensors are off: turn on Continuous Monitoring in the Dyson app": "感測器已關閉：請在 Dyson App 開啟「持續監測」",
         // Settings
         "Reading the Photos app's albums…": "正在讀取「照片」App 的相簿…",
         "deskdash may not read the Photos library: allow it in System Settings → Privacy & Security → Photos.": "deskdash 沒有讀取照片圖庫的權限：請到「系統設定 → 隱私權與安全性 → 照片」允許。",
@@ -65,7 +78,7 @@ enum L10n {
         "Limits (what is left of the Claude and Codex plans)": "用量（Claude 與 Codex 方案還剩多少）",
         "Tokens (what the coding agents used)": "Token 用量（AI 程式助理用了多少）",
         "Language": "語言",
-        "Menus, alerts and Settings": "選單、提醒與設定",
+        "Pages, menus, alerts and Settings": "頁面、選單、提醒與設定",
         "Follow macOS": "跟隨 macOS",
         "Dock screen": "擴充座螢幕",
         "Show the dashboard on": "儀表板顯示在",
