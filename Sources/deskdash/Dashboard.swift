@@ -192,14 +192,14 @@ final class Dashboard {
         case .waiting:
             if cfg.jumpOnWaiting { show(.agents, hold: cfg.holdSeconds) }
             let s = visibleSessions.filter { $0.state == .waiting }.max { $0.since < $1.since }
-            raise(.waiting, title: "\(s?.kind.title ?? "An agent") needs you",
-                  body: s.map { [$0.name, $0.detail ?? "", $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "",
+            raise(.waiting, title: L10n.needsYou(s?.kind.title ?? "An agent"),
+                  body: s.map { [$0.name, L10n.t($0.detail ?? ""), $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "",
                   session: s?.id)
         case .done:
             doneFlashUntil = Date().addingTimeInterval(6)
             if cfg.jumpOnDone && page != .agents { show(.agents, hold: min(10, cfg.holdSeconds)) }
             let s = visibleSessions.filter { $0.state == .done }.max { $0.since < $1.since }
-            raise(.done, title: "\(s?.kind.title ?? "An agent") finished",
+            raise(.done, title: L10n.finished(s?.kind.title ?? "An agent"),
                   body: s.map { [$0.name, $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "", session: s?.id)
         case .limit:
             if config.limits.jumpOnAlert && hasLimits { show(.limits, hold: cfg.holdSeconds) }
@@ -270,26 +270,27 @@ final class Dashboard {
     /// `deskdash ctl chime KIND`: the sound once, and the card until it is closed, whatever the settings.
     func preview(_ kind: Chime.Kind) {
         let title = switch kind {
-        case .waiting: "Claude Code needs you"
-        case .done: "Codex finished"
-        case .limit: "Claude 5-hour limit: 15% left"
+        case .waiting: L10n.needsYou("Claude Code")
+        case .done: L10n.finished("Codex")
+        case .limit: L10n.limitLow("Claude Code", week: false, left: 15)
         }
-        chime.preview(kind, config.alerts, title: title, body: "A preview of deskdash's alert")
-        showCard(AlertCard(kind: kind, title: title, body: "A preview of deskdash's alert"), for: nil)
+        let body = L10n.t("A preview of deskdash's alert")
+        chime.preview(kind, config.alerts, title: title, body: body)
+        showCard(AlertCard(kind: kind, title: title, body: body), for: nil)
     }
 
     /// The window with the least left, for the limit alert: "Claude 5-hour limit: 15% left".
     private var lowestLimit: (String, String) {
-        var lowest: (AgentLimits, String, UsageWindow)?
+        var lowest: (AgentLimits, Bool, UsageWindow)?
         for l in visibleLimits {
-            for (name, w) in [("5-hour", l.session), ("weekly", l.week)] {
+            for (week, w) in [(false, l.session), (true, l.week)] {
                 guard let w else { continue }
-                if lowest == nil || w.left < lowest!.2.left { lowest = (l, name, w) }
+                if lowest == nil || w.left < lowest!.2.left { lowest = (l, week, w) }
             }
         }
-        guard let (l, name, w) = lowest else { return ("A plan limit is running low", "") }
-        let resets = w.resetsAt.map { "Resets in " + Fmt.duration($0.timeIntervalSince(now)) } ?? ""
-        return ("\(l.kind.title) \(name) limit: \(Int(w.left.rounded()))% left", resets)
+        guard let (l, week, w) = lowest else { return (L10n.t("A plan limit is running low"), "") }
+        let resets = w.resetsAt.map { L10n.resetsIn(Fmt.duration($0.timeIntervalSince(now))) } ?? ""
+        return (L10n.limitLow(l.kind.title, week: week, left: Int(w.left.rounded())), resets)
     }
 
     // MARK: limits

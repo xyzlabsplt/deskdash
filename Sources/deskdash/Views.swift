@@ -1010,7 +1010,7 @@ struct AlertBanner: View {
                             .lineLimit(2)
                             .minimumScaleFactor(0.7)
                     }
-                    TokenCaption(text: "CLICK TO DISMISS")
+                    TokenCaption(text: L10n.t("CLICK TO DISMISS"))
                         .padding(.top, 8)
                 }
                 .lineLimit(1)

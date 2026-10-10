@@ -2,6 +2,7 @@
 // within 2 seconds. JSON5: comments and trailing commas are fine. Every key is optional, and anything
 // left out uses the default shown here.
 {
+  "language": "",                   // menus and alerts: "" follows macOS, or "en", "zh-Hant"
   "display": {
     "match": "Wokyis",              // part of the screen's name in System Settings > Displays; only it is covered
     "keepOffMain": false,           // when a monitor is connected and the dock screen is main, make the monitor main
@@ -76,6 +77,7 @@
   },
   "photos": {                       // the photos page: pictures from a folder of yours
     "folder": "",                   // e.g. "~/Pictures/deskdash", its subfolders included; "" has no photos page
+    "album": "",                    // or an album in the Photos app, by name (e.g. "Favorites"); `deskdash ctl albums` logs them
     "shuffle": true,
     "fill": false,                  // crop to fill the screen; false shows each whole over a blurred copy of itself
     "clock": true,                  // the time and date in the corner

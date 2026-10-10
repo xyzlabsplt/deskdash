@@ -88,7 +88,7 @@ struct CalloutView: View {
                     .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
-            .help("Close")
+            .help(L10n.t("Close"))
         }
         .padding(14)
         .frame(width: Self.width, alignment: .leading)

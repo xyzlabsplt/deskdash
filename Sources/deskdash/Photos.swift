@@ -4,7 +4,7 @@ import ImageIO
 
 /// A picture for the photos page, decoded and sized for the 1280x720 canvas ahead of time, so the page only draws it.
 struct Photo: Equatable, @unchecked Sendable {  // CGImage is immutable
-    let id: String  // the file's path
+    let id: String  // its PhotoRef's id
     let image: CGImage
     let backdrop: CGImage?  // a blurred copy that fills the screen behind a picture shown whole
     let taken: Date?
@@ -12,31 +12,45 @@ struct Photo: Equatable, @unchecked Sendable {  // CGImage is immutable
     static func == (a: Photo, b: Photo) -> Bool { a.id == b.id }
 }
 
-/// The photos page: the pictures in `photos.folder` (and its subfolders), one per visit, shuffled. The folder is listed
-/// every 5 minutes, and the next picture is decoded while the page is away, off the main thread, so it is ready when the
-/// page comes round. Nothing is cached on disk.
+/// One of the photos page's pictures: a file in `photos.folder`, or a picture in the Photos app's `photos.album`.
+enum PhotoRef: Hashable, Sendable {
+    case file(URL)
+    case asset(String)  // a PHAsset's localIdentifier
+
+    var id: String {
+        switch self {
+        case .file(let url): url.path
+        case .asset(let id): "photos:" + id
+        }
+    }
+}
+
+/// The photos page: the pictures in `photos.album` (an album in the Photos app) or else `photos.folder` (and its
+/// subfolders), one per visit, shuffled. They are listed every 5 minutes, and the next picture is decoded while the
+/// page is away, off the main thread, so it is ready when the page comes round. Nothing is cached on disk.
 @MainActor
 final class PhotosService {
     nonisolated private static let kinds: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "tif", "tiff", "gif", "webp"]
 
     private let dash: Dashboard
     private var cfg: Config.Photos?
-    private var files: [URL] = []
-    private var queue: [URL] = []
+    private var refs: [PhotoRef] = []
+    private var queue: [PhotoRef] = []
     private var listedAt = Date.distantPast
     private var busy = false
     private var showing = false
     private var stale = true  // the photo on hand has been shown: decode the next one
+    private var note = ""
 
     init(dash: Dashboard) {
         self.dash = dash
     }
 
     func apply(_ cfg: Config.Photos, enabled: Bool) {
-        let wanted = enabled && !cfg.folder.isEmpty ? cfg : nil
+        let wanted = enabled && !(cfg.folder.isEmpty && cfg.album.isEmpty) ? cfg : nil
         guard wanted != self.cfg else { return }
         self.cfg = wanted
-        files = []
+        refs = []
         queue = []
         listedAt = .distantPast
         stale = true
@@ -52,7 +66,8 @@ final class PhotosService {
         if stale && !onPage { next(cfg) }
     }
 
-    /// For `deskdash snapshot`: one picture, now.
+    /// For `deskdash snapshot`: one picture from the folder, now. The Photos app's albums are left out: a bare binary
+    /// asking for the library would be asking on behalf of Terminal.
     func loadOnce(_ cfg: Config.Photos) async {
         let urls = await Task.detached(priority: .utility) { Self.list(cfg.folder) }.value
         guard let url = cfg.shuffle ? urls.randomElement() : urls.first else { return }
@@ -63,39 +78,73 @@ final class PhotosService {
         busy = true
         listedAt = Date()
         Task {
-            let found = await Task.detached(priority: .utility) { Self.list(cfg.folder) }.value
+            let found: [PhotoRef]
+            if cfg.album.isEmpty {
+                found = await Task.detached(priority: .utility) { Self.list(cfg.folder).map(PhotoRef.file) }.value
+                say(found.isEmpty ? "photos: no pictures in \(cfg.folder)" : "photos: \(found.count) pictures in \(cfg.folder)")
+            } else {
+                switch await PhotoLibrary.list(album: cfg.album) {
+                case .denied:
+                    found = []
+                    say("photos: deskdash may not read the Photos library; System Settings → Privacy & Security → Photos")
+                case .noAlbum(let albums):
+                    found = []
+                    say("photos: no album named '\(cfg.album)' in the Photos app. Its albums: \(albums.joined(separator: ", "))")
+                case .pictures(let ids):
+                    found = ids.map(PhotoRef.asset)
+                    say("photos: \(ids.count) pictures in the album '\(cfg.album)'")
+                }
+            }
             busy = false
             guard self.cfg == cfg else { return }
-            if found.isEmpty, !files.isEmpty || dash.photo == nil {
-                log("photos: no pictures in \(cfg.folder)")
-            }
-            files = found
+            refs = found
             queue.removeAll { !found.contains($0) }
             if found.isEmpty { dash.photo = nil }
         }
     }
 
     private func next(_ cfg: Config.Photos) {
-        if queue.isEmpty { queue = cfg.shuffle ? files.shuffled() : files }
+        if queue.isEmpty { queue = cfg.shuffle ? refs.shuffled() : refs }
         // Never the same picture twice in a row, even across a reshuffle.
-        if queue.count > 1, queue.first?.path == dash.photo?.id { queue.append(queue.removeFirst()) }
+        if queue.count > 1, queue.first?.id == dash.photo?.id { queue.append(queue.removeFirst()) }
         guard !queue.isEmpty else { return }
-        let url = queue.removeFirst()
+        let ref = queue.removeFirst()
         busy = true
         Task {
-            let photo = await Task.detached(priority: .utility) { Self.load(url, fill: cfg.fill) }.value
+            let photo: Photo? = switch ref {
+            case .file(let url): await Task.detached(priority: .utility) { Self.load(url, fill: cfg.fill) }.value
+            case .asset(let id): await PhotoLibrary.load(id, fill: cfg.fill)
+            }
             busy = false
             guard self.cfg == cfg else { return }
             if let photo {
                 dash.photo = photo
                 stale = false
             } else {
-                files.removeAll { $0 == url }  // unreadable: skip it until the next listing
+                refs.removeAll { $0 == ref }  // unreadable: skip it until the next listing
             }
         }
     }
 
+    /// `deskdash ctl albums`: the Photos app's album names, in the log, to pick `photos.album` from.
+    func logAlbums() {
+        Task {
+            switch await PhotoLibrary.list(album: "") {
+            case .denied: log("photos: deskdash may not read the Photos library; System Settings → Privacy & Security → Photos")
+            case .noAlbum(let albums): log("photos: albums in the Photos app: \(albums.joined(separator: ", "))")
+            case .pictures: break
+            }
+        }
+    }
+
+    private func say(_ text: String) {
+        guard text != note else { return }
+        note = text
+        log(text)
+    }
+
     nonisolated private static func list(_ folder: String) -> [URL] {
+        guard !folder.isEmpty else { return [] }
         let root = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true)
         guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
                                                         options: [.skipsHiddenFiles, .skipsPackageDescendants])
@@ -132,6 +181,8 @@ final class PhotosService {
     }()
 
     nonisolated static func backdropForDemo(_ image: CGImage) -> CGImage? { backdrop(of: image) }
+
+    nonisolated static func backdrop(for image: CGImage) -> CGImage? { backdrop(of: image) }
 
     /// The picture cropped to fill 1280x720 at a quarter size, blurred, and darkened, done once here rather than by
     /// SwiftUI on every redraw.

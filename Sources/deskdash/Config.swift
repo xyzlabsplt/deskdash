@@ -3,6 +3,8 @@ import Foundation
 /// Settings from config.json (JSON5: comments and trailing commas allowed). Every key is optional;
 /// anything missing falls back to the defaults below, which are also documented in config.example.json.
 struct Config: Codable, Equatable, Sendable {
+    /// The menus' and alerts' language: "" follows macOS, or "en" or "zh-Hant".
+    var language = ""
     var display = Display()
     var pages = Pages()
     var clock = Clock()
@@ -151,6 +153,9 @@ struct Config: Codable, Equatable, Sendable {
     struct Photos: Codable, Equatable, Sendable {
         /// A folder of pictures (JPEG, HEIC, PNG and the like), its subfolders included, for the photos page. "" has none.
         var folder = ""
+        /// An album in the Photos app, by the name it shows there (Favorites, a shared album, one of yours). When set, it
+        /// takes the folder's place. `deskdash ctl albums` logs the names.
+        var album = ""
         var shuffle = true
         /// Crop each picture to fill the screen. false shows it whole, over a blurred copy of itself.
         var fill = false
@@ -196,6 +201,7 @@ extension Config {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Config()
+        language = try c.get(.language, d.language)
         display = try c.get(.display, d.display)
         pages = try c.get(.pages, d.pages)
         clock = try c.get(.clock, d.clock)
@@ -349,6 +355,7 @@ extension Config.Photos {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Self()
         folder = try c.get(.folder, d.folder)
+        album = try c.get(.album, d.album)
         shuffle = try c.get(.shuffle, d.shuffle)
         fill = try c.get(.fill, d.fill)
         clock = try c.get(.clock, d.clock)

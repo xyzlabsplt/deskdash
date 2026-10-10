@@ -117,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func applyConfig() {
+        L10n.apply(dash.config.language)
         markets.apply(symbols: dash.config.markets.symbols)
         weather.apply(dash.config.weather)
         dyson.apply(dash.config.dyson)
@@ -260,18 +261,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func menuItems(full: Bool) -> [NSMenuItem] {
         func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            let item = NSMenuItem(title: L10n.t(title), action: action, keyEquivalent: key)
             item.target = self
             return item
         }
         var items: [NSMenuItem] = []
         if full {
-            let header = NSMenuItem(title: "deskdash: \(dash.page.title) on \(dash.config.display.match)", action: nil, keyEquivalent: "")
+            let header = NSMenuItem(title: L10n.menuHeader(page: dash.page.title, screen: dash.config.display.match),
+                                    action: nil, keyEquivalent: "")
             header.isEnabled = false
-            let pages = NSMenuItem(title: "Show Page", action: nil, keyEquivalent: "")
+            let pages = NSMenuItem(title: L10n.t("Show Page"), action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for page in dash.pages {
-                let entry = item(page.title, #selector(menuShowPage(_:)))
+                let entry = item(L10n.t(page.title), #selector(menuShowPage(_:)))
                 entry.representedObject = page.fileName
                 entry.state = page == dash.page ? .on : .off
                 submenu.addItem(entry)
@@ -455,6 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "demo":
             dash.demo.toggle()
             if dash.demo { dash.alert(.waiting) }
+        case "albums": photos.logAlbums()
         case "chime":
             let kind: Chime.Kind? = switch argument {
             case "waiting": .waiting
@@ -566,6 +569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if dash.config.pages.order.contains("photos") { await photos.loadOnce(dash.config.photos) }
         }
         dash.tick()
+        L10n.apply(dash.config.language)
         dash.setCovering(true)  // the card, if any, draws on the page rather than floating over a real screen
         dash.stillFrame = true
         dash.brightnessPreview = 1  // a picture of the page, not of the night: full brightness whatever the hour
@@ -577,8 +581,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         if options.only.contains("alert") {  // the alert card, over the first page
             dash.show(dash.pages[0], animated: false)
-            dash.showCard(Dashboard.AlertCard(kind: .waiting, title: "Claude Code needs you",
-                                              body: "Fix the flaky login test · permission prompt · web-app"), for: nil)
+            dash.showCard(Dashboard.AlertCard(kind: .waiting, title: L10n.needsYou("Claude Code"),
+                                              body: "Fix the flaky login test · \(L10n.t("permission prompt")) · web-app"), for: nil)
             render(Stage(dash: dash), to: out.appendingPathComponent("alert.png"))
             dash.dismissCard()
         }
