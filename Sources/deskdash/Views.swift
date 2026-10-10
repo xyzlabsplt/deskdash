@@ -101,6 +101,14 @@ struct Stage: View {
                     .frame(maxHeight: .infinity, alignment: .bottom)
             }
             AttentionFrame(waiting: dash.anyWaiting, done: dash.doneFlash, blinkOn: dash.blinkOn)
+            if dash.soundSilent {  // sounds are on, but the Mac is muted: no chime would be heard
+                Image(systemName: "speaker.slash.fill")
+                    .font(.system(size: 44, weight: .bold))
+                    .foregroundStyle(Theme.waiting)
+                    .padding(.top, 36)
+                    .padding(.trailing, 44)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
             if let post = dash.telegramPost {
                 TelegramCard(post: post, use24h: dash.config.clock.use24h, zone: Fmt.zone(dash.config.clock.timeZone))
                     .id(post.id)
@@ -137,6 +145,7 @@ struct PageView: View {
         case .climate: ClimatePage(dash: dash)
         case .markets(let i): MarketsPage(dash: dash, symbols: dash.symbols(onPage: i))
         case .agents: AgentsPage(sessions: dash.visibleSessions, now: dash.now, blinkOn: dash.blinkOn)
+        case .limits: LimitsPage(dash: dash)
         case .tokens: TokensPage(dash: dash)
         }
     }
@@ -916,6 +925,162 @@ struct AttentionFrame: View {
         } else if done {
             Rectangle().strokeBorder(Theme.up.opacity(strength), lineWidth: 18)
         }
+    }
+}
+
+// MARK: limits
+
+/// Each agent's plan limits side by side: what is left of the 5-hour window large, the week under it. Each bar has a
+/// white tick where an even pace would leave it, so a bar reaching past its tick has room to spare. Amber means it
+/// runs out before it resets at the pace so far, or is nearly gone; red, almost nothing is left.
+struct LimitsPage: View {
+    let dash: Dashboard
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 72) {
+            let shown = dash.visibleLimits.prefix(2)
+            ForEach(shown) {
+                LimitsColumn(limits: $0, now: dash.now, use24h: dash.config.clock.use24h, solo: shown.count == 1)
+            }
+        }
+        .padding(.horizontal, 56)
+        .padding(.top, 34)
+        .padding(.bottom, 74)  // clear of the agent bars along the bottom edge
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct LimitsColumn: View {
+    let limits: AgentLimits
+    let now: Date
+    let use24h: Bool
+    var solo = false  // the only column: the figures grow into the room
+
+    var body: some View {
+        let age = now.timeIntervalSince(limits.updated)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                TokenCaption(text: limits.kind.rawValue.uppercased() + (limits.plan.map { "  " + $0.uppercased() } ?? ""))
+                Spacer(minLength: 16)
+                if age > 1800 {  // an old report: the agent has not been used since
+                    TokenCaption(text: Fmt.duration(age).uppercased() + " AGO")
+                }
+            }
+            // The first window large, the second under it. A plan with one window (Codex Pro has only the week)
+            // shows that one large, in the middle of the column.
+            let windows = [("LEFT  5H", limits.session), ("LEFT  WEEK", limits.week)].compactMap { c, w in w.map { (c, $0) } }
+            let first: CGFloat = solo ? 200 : 150
+            if windows.count == 1 { Spacer(minLength: 0) }
+            ForEach(Array(windows.enumerated()), id: \.offset) { index, item in
+                if index > 0 {
+                    Spacer(minLength: 18)
+                    Rectangle().fill(Theme.faint).frame(height: 2)
+                    Spacer(minLength: 6)
+                }
+                LimitFigure(window: item.1, now: now, caption: item.0, size: index == 0 ? first : 110)
+                    .padding(.top, index == 0 ? -first / 9 : 0)
+                    .padding(.bottom, index == 0 ? -4 : 0)
+                LimitBar(window: item.1, now: now)
+                    .frame(height: 22)
+                    .padding(.top, index == 0 ? 0 : 4)
+                LimitNote(window: item.1, now: now, use24h: use24h)
+                    .padding(.top, 14)
+            }
+            if windows.count == 1 { Spacer(minLength: 40) }
+        }
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+@MainActor
+enum LimitStyle {
+    /// Green with room to spare, amber when it runs out before the reset or is under 20% left, red under 10%.
+    static func color(_ w: UsageWindow, _ now: Date) -> Color {
+        if w.left < 10 { return Theme.down }
+        if w.left < 20 || w.runsOut(now) != nil { return Theme.waiting }
+        return Theme.up
+    }
+
+    private static let weekday: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE"
+        return f
+    }()
+
+    /// "1h 42m" within a day, otherwise the weekday and time: "FRI 14:00".
+    static func when(_ date: Date, now: Date, use24h: Bool) -> String {
+        let wait = date.timeIntervalSince(now)
+        if wait < 86400 { return "IN " + Fmt.duration(wait).uppercased() }
+        let time = Fmt.time(date, use24h: use24h) + (use24h ? "" : " " + Fmt.meridiem(date))
+        return weekday.string(from: date).uppercased() + " " + time
+    }
+}
+
+/// What is left as a large percentage, white while there is room and in the alert color when not.
+struct LimitFigure: View {
+    let window: UsageWindow
+    let now: Date
+    let caption: String
+    let size: CGFloat
+
+    var body: some View {
+        let color = LimitStyle.color(window, now)
+        HStack(alignment: .firstTextBaseline, spacing: 20) {
+            Text("\(Int(window.left.rounded()))%")
+                .font(Theme.font(size, .bold))
+                .monospacedDigit()
+                .foregroundStyle(color == Theme.up ? Theme.text : color)
+            TokenCaption(text: caption)
+        }
+    }
+}
+
+/// What is left, as a bar in the alert colors, with a tick where an even pace would leave it.
+struct LimitBar: View {
+    let window: UsageWindow
+    let now: Date
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.14))
+                if window.left > 0 {
+                    Capsule()
+                        .fill(LimitStyle.color(window, now))
+                        .frame(width: max(geo.size.height, width * window.left / 100))
+                }
+                if let elapsed = window.elapsed(now) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Theme.text)
+                        .frame(width: 6, height: geo.size.height + 18)
+                        .offset(x: min(width - 6, max(0, width * (1 - elapsed) - 3)))
+                }
+            }
+        }
+    }
+}
+
+/// When it runs out at this pace, in the alert color, or else when it resets.
+struct LimitNote: View {
+    let window: UsageWindow
+    let now: Date
+    let use24h: Bool
+
+    var body: some View {
+        Group {
+            if let out = window.runsOut(now) {
+                Text("RUNS OUT " + LimitStyle.when(out, now: now, use24h: use24h))
+                    .foregroundStyle(LimitStyle.color(window, now))
+            } else if let resets = window.resetsAt {
+                Text("RESETS " + LimitStyle.when(resets, now: now, use24h: use24h))
+                    .foregroundStyle(Theme.secondary)
+            }
+        }
+        .font(Theme.font(40, .semibold))
+        .minimumScaleFactor(0.7)
     }
 }
 

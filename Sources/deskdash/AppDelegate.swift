@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let stats: SystemStatsService
     private let music: NowPlayingService
     private let tokens: TokensService
+    private let limits: LimitsService
     private var window: NSWindow?
     private var displayAssertion: IOPMAssertionID = 0
     private var hiddenUntil: Date?
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         stats = SystemStatsService(dash: dash)
         music = NowPlayingService(dash: dash)
         tokens = TokensService(dash: dash)
+        limits = LimitsService(dash: dash)
         super.init()
     }
 
@@ -84,6 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if n % 2 == 0 { stats.sample() }
             dash.tick()
             tokens.tick()
+            limits.tick()
+            if n % 5 == 0 {
+                let silent = dash.config.alerts.sound && SystemAudio.isSilent
+                if silent != dash.soundSilent { dash.soundSilent = silent }
+            }
             if let until = hiddenUntil, Date() >= until { placeWindow() }
             updateStacking()
             n += 1
@@ -111,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         telegram.apply(dash.config.telegram)
         stats.apply(dash.config.stats)
         tokens.apply(dash.config.tokens, enabled: dash.config.pages.order.contains("tokens"))
+        limits.apply(dash.config.limits, enabled: dash.config.pages.order.contains("limits"))
         placeWindow()
         updateDisplayAssertion()
     }
@@ -422,6 +430,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "demo":
             dash.demo.toggle()
             if dash.demo { dash.alert(.waiting) }
+        case "chime":
+            let kind: Chime.Kind? = switch argument {
+            case "waiting": .waiting
+            case "done": .done
+            case "limit": .limit
+            default: nil
+            }
+            if let kind { dash.preview(kind) } else { log("ctl: chime waiting | done | limit") }
         case "page":
             if let target = dash.pages.first(where: { $0.name == argument || $0.fileName == argument }) {
                 dash.show(target, hold: 60)
@@ -506,6 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                                      "va10": "12", "noxl": "4", "co2r": "712", "hchr": "9"])
             dash.stats = .demo
             dash.tokens = .demo(today: LocalDay.of(Date()))
+            dash.limits = AgentLimits.demo(now: Date())
             dash.weekStart = 1  // GitHub's Sunday, not this Mac's first weekday
             var track = NowPlaying.demo(now: Date())
             if !dash.config.music.artwork { track?.artwork = nil }
@@ -519,6 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             await stats.prime()
             if dash.config.pages.order.contains("tokens") { await tokens.scanOnce(dash.config.tokens) }
+            if dash.config.pages.order.contains("limits") { await limits.readOnce(dash.config.limits) }
         }
         dash.tick()
         dash.stillFrame = true

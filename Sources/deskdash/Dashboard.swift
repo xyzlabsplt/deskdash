@@ -6,6 +6,7 @@ enum Page: Hashable, Sendable {
     case climate
     case markets(Int)
     case agents
+    case limits
     case tokens
 
     var name: String {
@@ -15,6 +16,7 @@ enum Page: Hashable, Sendable {
         case .climate: "climate"
         case .markets: "markets"
         case .agents: "agents"
+        case .limits: "limits"
         case .tokens: "tokens"
         }
     }
@@ -31,6 +33,7 @@ enum Page: Hashable, Sendable {
         case .climate: "Climate"
         case .markets(let i): i == 0 ? "Markets" : "Markets \(i + 1)"
         case .agents: "Agents"
+        case .limits: "Limits"
         case .tokens: "Tokens"
         }
     }
@@ -51,6 +54,10 @@ final class Dashboard {
     /// What Music or Spotify is playing on this Mac; nil while nothing plays.
     private(set) var track: NowPlaying?
     var sessions: [AgentSession] = []
+    /// Claude Code's and Codex's plan limits, as each last reported them.
+    var limits: [AgentLimits] = []
+    /// The Mac's sound is muted or all the way down while sounds are on: shown, since no chime would be heard.
+    var soundSilent = false
     /// Claude Code's and Codex's tokens by day; nil while the tokens page is off.
     var tokens: TokenHistory?
     /// The token heatmap's top row, as Calendar's weekday (1 is Sunday); nil follows this Mac's calendar.
@@ -69,6 +76,10 @@ final class Dashboard {
     @ObservationIgnored private var telegramQueue: [TelegramPost] = []
     @ObservationIgnored private var telegramUntil: Date?
     @ObservationIgnored private var announcedTrack: String?
+    let chime = Chime()
+    let callout = Callout()
+    /// What the card on the main screen is up for, so it leaves once that is over: nil for one that stays until closed.
+    @ObservationIgnored private var calloutFor: (kind: Chime.Kind, session: String?)?
 
     init(config: Config) {
         self.config = config
@@ -85,6 +96,7 @@ final class Dashboard {
             case "climate" where hasIndoor: out.append(.climate)
             case "markets": out += (0..<marketPageCount).map { Page.markets($0) }
             case "agents" where hasActiveAgents: out.append(.agents)
+            case "limits" where hasLimits: out.append(.limits)
             case "tokens" where hasTokens: out.append(.tokens)
             default: break
             }
@@ -110,6 +122,16 @@ final class Dashboard {
     func tick() {
         now = Date()
         if let until = doneFlashUntil, now >= until { doneFlashUntil = nil }
+        if callout.shown, !config.alerts.card || calloutFor.map(stillOn) == false {
+            callout.hide()
+            calloutFor = nil
+        }
+        chime.tick(config.alerts, quiet: quietNow) { kind in
+            switch kind {
+            case .waiting: anyWaiting
+            case .done, .limit: true  // until someone is back: a finished turn waits for you as well
+            }
+        }
         if let until = telegramUntil, now >= until { showNextTelegram() }
         if let until = trackFlashUntil, now >= until { withAnimation(.easeInOut(duration: 0.3)) { trackFlashUntil = nil } }
         let list = pages
@@ -153,18 +175,84 @@ final class Dashboard {
     var stillFrame = false
     var blinkOn: Bool { stillFrame || Int(now.timeIntervalSince1970) % 2 == 0 }
 
-    enum AgentAlert { case waiting, done }
+    enum AgentAlert { case waiting, done, limit }
 
     func alert(_ kind: AgentAlert) {
         let cfg = config.agents
         switch kind {
         case .waiting:
             if cfg.jumpOnWaiting { show(.agents, hold: cfg.holdSeconds) }
+            let s = visibleSessions.filter { $0.state == .waiting }.max { $0.since < $1.since }
+            raise(.waiting, title: "\(s?.kind.title ?? "An agent") needs you",
+                  body: s.map { [$0.name, $0.detail ?? "", $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "",
+                  session: s?.id)
         case .done:
             doneFlashUntil = Date().addingTimeInterval(6)
             if cfg.jumpOnDone && page != .agents { show(.agents, hold: min(10, cfg.holdSeconds)) }
+            let s = visibleSessions.filter { $0.state == .done }.max { $0.since < $1.since }
+            raise(.done, title: "\(s?.kind.title ?? "An agent") finished",
+                  body: s.map { [$0.name, $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "", session: s?.id)
+        case .limit:
+            if config.limits.jumpOnAlert && hasLimits { show(.limits, hold: cfg.holdSeconds) }
+            let (title, body) = lowestLimit
+            raise(.limit, title: title, body: body, session: nil)
         }
     }
+
+    /// The sound, and the card unless one that outranks it is up.
+    private func raise(_ kind: Chime.Kind, title: String, body: String, session: String?) {
+        chime.ring(kind, config.alerts, quiet: quietNow, title: title, body: body)
+        guard config.alerts.card else { return }
+        if callout.shown, let current = calloutFor, current.kind > kind, stillOn(current) { return }
+        callout.show(kind, title: title, body: body)
+        calloutFor = (kind, session)
+    }
+
+    /// Whether what a card is up for still holds: the session still waits; the finished one has not been picked up
+    /// again (it stays DONE or goes IDLE); a limit is still low.
+    private func stillOn(_ c: (kind: Chime.Kind, session: String?)) -> Bool {
+        let session = c.session.flatMap { id in visibleSessions.first { $0.id == id } }
+        switch c.kind {
+        case .waiting: return c.session == nil ? anyWaiting : session?.state == .waiting
+        case .done: return c.session == nil || session.map { $0.state == .done || $0.state == .idle } == true
+        case .limit:
+            let below = config.limits.alertBelow
+            return visibleLimits.contains { [$0.session, $0.week].contains { $0.map { $0.left < below } == true } }
+        }
+    }
+
+    /// `deskdash ctl chime KIND`: the sound once, and the card until it is closed, whatever the settings.
+    func preview(_ kind: Chime.Kind) {
+        let title = switch kind {
+        case .waiting: "Claude Code needs you"
+        case .done: "Codex finished"
+        case .limit: "Claude 5-hour limit: 15% left"
+        }
+        chime.preview(kind, config.alerts, title: title, body: "A preview of deskdash's alert")
+        callout.show(kind, title: title, body: "A preview of deskdash's alert. × closes it.")
+        calloutFor = nil
+    }
+
+    /// The window with the least left, for the limit alert: "Claude 5-hour limit: 15% left".
+    private var lowestLimit: (String, String) {
+        var lowest: (AgentLimits, String, UsageWindow)?
+        for l in visibleLimits {
+            for (name, w) in [("5-hour", l.session), ("weekly", l.week)] {
+                guard let w else { continue }
+                if lowest == nil || w.left < lowest!.2.left { lowest = (l, name, w) }
+            }
+        }
+        guard let (l, name, w) = lowest else { return ("A plan limit is running low", "") }
+        let resets = w.resetsAt.map { "Resets in " + Fmt.duration($0.timeIntervalSince(now)) } ?? ""
+        return ("\(l.kind.title) \(name) limit: \(Int(w.left.rounded()))% left", resets)
+    }
+
+    // MARK: limits
+
+    var hasLimits: Bool { !limits.isEmpty }
+
+    /// As of now: a window past its reset time shows as started over.
+    var visibleLimits: [AgentLimits] { limits.map { $0.at(now) } }
 
     // MARK: tokens
 
@@ -226,6 +314,11 @@ final class Dashboard {
         let night = DailyWindow(config.schedule.dim)?.contains(now) ?? false
         let level = brightnessPreview ?? (night ? config.schedule.dimBrightness : config.schedule.dayBrightness)
         return min(1, max(0.05, level))
+    }
+
+    /// No sounds in the night window, when `alerts.quietAtNight` is on.
+    var quietNow: Bool {
+        config.alerts.quietAtNight && (DailyWindow(config.schedule.dim)?.contains(now) ?? false)
     }
 
     var keepAwakeNow: Bool {

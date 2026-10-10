@@ -4,9 +4,9 @@ A glanceable dashboard for the 5" 1280×720 screen on the Wokyis M5, the dock th
 
 One native Swift binary, no dependencies, about 1 KB/s of network, nothing listening on a port. It covers only the screen whose name contains `Wokyis` (Settings can pick another), and hides if that screen goes away. Everything personal, like your city, tickers, channels and purifier, is set in its Settings window and stays on your Mac.
 
-| Clock | Now Playing | Climate | Markets | Agents | Tokens |
-|---|---|---|---|---|---|
-| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![tokens](docs/tokens.png) |
+| Clock | Now Playing | Climate | Markets | Agents | Limits | Tokens |
+|---|---|---|---|---|---|---|
+| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![limits](docs/limits.png) | ![tokens](docs/tokens.png) |
 
 ## Pages
 
@@ -45,9 +45,18 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
   | gray | **IDLE** | open but quiet; hidden after 12 h |
 
   This page only rotates in while some session is not idle. A thin bar per active session runs along the bottom of every other page, in the same colors.
+- **Limits**: how much is left of your Claude and Codex plans' usage limits, side by side: the 5-hour window large, the week under it (a plan with only one window, like Codex Pro's week, shows that one large). Each bar has a white tick where an even pace would leave it, so a bar that reaches past its tick has room to spare. The figures stay white while there is room. They turn amber when the window would run out before it resets at the pace so far ("RUNS OUT THU 18:00") or has under 20% left, and red under 10%. Otherwise the line under the bar says when it resets. A report older than 30 minutes says how old. This page appears once either agent has reported its limits (see [How plan limits work](#how-plan-limits-work)).
 - **Tokens**: the tokens your coding agents used on this Mac: Claude Code, Codex, Gemini CLI and Muse Code. Today's count is large, with each agent's share under it, and the last 7 and 30 days, all time, and your streak of days with any use sit beside it. Underneath are the last 26 weeks as a GitHub-style heatmap: a column per week, a row per weekday from your calendar's first day of the week, and GitHub's shades of green, from none to the busiest quarter of your days. Today is outlined. While this page shows, the count catches up every 10 s. It appears once there is any use in those weeks (see [How token counting works](#how-token-counting-works)).
 
-**Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents.
+**Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents. When a plan's 5-hour or weekly window drops under 20% left, the limits page shows for 20 s, once per window until it resets.
+
+**Sounds and the alert card.** Off until you turn them on in `config.json` (`"alerts": { "sound": true, "card": true }`). Then each of those alerts also plays a sound (Glass when a session needs you, Hero when one finishes, Funk when a limit runs low; any of macOS's alert sounds by name), and a card at the top right of the main screen says which session and what it waits for. The card never takes focus. It stays until what it is for is over (the session stops waiting, or you pick the finished one up again) or you click its ×.
+
+- The sound repeats until you are back: until anyone uses the Mac's keyboard or mouse, or what it rang for is over. It comes again after 30 s, then each wait is half as long again, up to every 3 minutes (`alerts.repeatSeconds`, `alerts.repeatMaxSeconds`), so a missed one is not the last without it turning into nagging.
+- It rings through Notification Center (`alerts.notify`), as a notification saying what it is for, so macOS keeps it quiet the way it does any app's: in a Focus, Sleep included, and while the Mac is muted. deskdash.app is ad-hoc signed, and macOS keeps Notification Center from apps without a developer signature, so the notification goes through `osascript`'s `display notification` and shows under Script Editor. That is a Standard Addition and needs no Automation permission. Its banner leaves after a few seconds by default; the card is what stays. With `"notify": false` deskdash plays the sound itself at `alerts.volume`, Focus or not.
+- No sound in the night window (`schedule.dim`, 23:00 to 08:00) while `alerts.quietAtNight` is on.
+- While sounds are on and the Mac is muted or turned all the way down, a muted-speaker icon shows in the dock screen's top right corner, since no chime would be heard.
+- `deskdash ctl chime waiting` (or `done`, `limit`) plays one and shows its card, whatever the settings, to try them.
 
 **Night.** From 23:00 to 08:00 the dashboard draws at 35% brightness, and at 100% the rest of the day. Settings → General sets both levels. While you drag either slider, the dock screen shows that level, whatever the time, and returns to the schedule's shortly after. The dimming is drawn, as black over the page, because macOS has no public control for this panel's backlight. From 08:00 to 23:00 it keeps the displays from idle-sleeping. macOS can only keep all displays awake, not one, so turn **Keep the displays awake** off in Settings → General if the big monitor should sleep on its own schedule.
 
@@ -114,6 +123,21 @@ The color comes from macOS's thermal pressure, not the degrees. On that M6 under
 
 Sessions whose process is gone are dropped, even without a `SessionEnd`.
 
+## How plan limits work
+
+The limits page reads what each agent itself reports about your plan. deskdash never touches a login or a token.
+
+- **Codex**: no setup. After every reply Codex logs a `token_count` event with the plan's `rate_limits`: each window's percent used, its length, and when it resets. deskdash reads the newest log's last 512 KB under `~/.codex/sessions/`, only those events, every 5 s and only when the file has changed. A window is the 5-hour one or the week by its length, not by its position, since Pro plans currently have only the week.
+- **Claude Code**: on Pro and Max plans Claude Code hands its status line command the plan's `rate_limits` (`five_hour` and `seven_day`, each with `used_percentage` and `resets_at`) from a session's first reply on. `hooks/claude-statusline.sh` copies just that object to `~/.local/state/deskdash/limits/claude.json` and prints a short `5h 24% · 7d 82%` for the status bar. A status line you already had keeps working: the installer saves its command and runs it after. To install it, from the checkout:
+
+  ```bash
+  scripts/install-claude-statusline.sh
+  ```
+
+  `--remove` puts back what was there. The status line runs in Claude Code in a terminal. Claude's desktop app does not run it, so sessions there do not update the page.
+
+A window past its reset time shows as started over until the agent reports again. The numbers are only as fresh as the agent's last reply: usage elsewhere (claude.ai, the ChatGPT apps) shows up after the next one. `deskdash limits` prints what the page would show, with when each window resets and when it would run out at the pace so far. In `config.json`, `limits.claude` and `limits.codex` point elsewhere (`""` leaves one out), `limits.alertBelow` moves the 20% alert, and `limits.jumpOnAlert` turns its jump off.
+
 ## How token counting works
 
 deskdash reads the logs the agents already keep, and only the token counts in them. There is nothing to set up, and nothing leaves this Mac.
@@ -158,10 +182,11 @@ Other ways to run it:
 .build/release/deskdash snapshot --demo        # render each page to snapshots/*.png with sample data and exit
 .build/release/deskdash snapshot settings      # render each Settings tab to snapshots/settings-*.png
 .build/release/deskdash ctl next               # also: prev, pause, resume, reload, demo, page agents, capture FILE,
-                                               #       hide [MINUTES], show, quit
+                                               #       hide [MINUTES], show, quit, chime waiting|done|limit
 .build/release/deskdash windows                # each display and whose windows are on it
 .build/release/deskdash music                  # what Music and Spotify announce, as they do; Control-C stops
 .build/release/deskdash tokens                 # the tokens Claude Code and Codex used, each day; --watch follows today's
+.build/release/deskdash limits                 # what is left of Claude's and Codex's plan limits, and when each resets
 swift scripts/fake-track.swift spotify         # pretend Spotify started a track (also music; paused, stopped)
 ```
 

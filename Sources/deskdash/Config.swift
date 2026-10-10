@@ -9,12 +9,14 @@ struct Config: Codable, Equatable, Sendable {
     var weather = Weather()
     var markets = Markets()
     var agents = Agents()
+    var limits = Limits()
     var tokens = Tokens()
     var dyson = Dyson()
     var telegram = Telegram()
     var stats = Stats()
     var music = Music()
     var schedule = Schedule()
+    var alerts = Alerts()
 
     struct Display: Codable, Equatable, Sendable {
         /// Part of the screen's name as System Settings > Displays shows it. Only that screen is ever covered.
@@ -22,7 +24,7 @@ struct Config: Codable, Equatable, Sendable {
     }
 
     struct Pages: Codable, Equatable, Sendable {
-        var order = ["clock", "music", "climate", "markets", "agents", "tokens"]  // all but clock and markets only when they have data
+        var order = ["clock", "music", "climate", "markets", "agents", "limits", "tokens"]  // all but clock and markets only when they have data
         var seconds = 12.0
         var durations: [String: Double] = ["clock": 15]
     }
@@ -71,6 +73,18 @@ struct Config: Codable, Equatable, Sendable {
         var jumpOnWaiting = true
         var jumpOnDone = true
         var holdSeconds = 20.0
+    }
+
+    struct Limits: Codable, Equatable, Sendable {
+        /// Where hooks/claude-statusline.sh copies the plan's limits from Claude Code's status line
+        /// (scripts/install-claude-statusline.sh sets it up). "" leaves Claude out.
+        var claude = "~/.local/state/deskdash/limits/claude.json"
+        /// Codex's home: the logs in its sessions/ carry the plan's limits after every reply. "" leaves Codex out.
+        var codex = "~/.codex"
+        /// Alert when either window has less than this percent left: once per window, until it resets.
+        var alertBelow = 20.0
+        /// ...and jump to the limits page.
+        var jumpOnAlert = true
     }
 
     struct Tokens: Codable, Equatable, Sendable {
@@ -133,6 +147,28 @@ struct Config: Codable, Equatable, Sendable {
         var dimBrightness = 0.35
         var dayBrightness = 1.0
     }
+
+    struct Alerts: Codable, Equatable, Sendable {
+        /// A sound when a session needs you, when one finishes, and when a limit runs low.
+        var sound = false
+        /// ...and a card at the top right of the main screen that says what for, until it is over or closed.
+        var card = false
+        /// macOS's alert sounds by name (/System/Library/Sounds: Glass, Hero, Funk, Ping, ...); "" stays quiet.
+        var waiting = "Glass"
+        var done = "Hero"
+        var limit = "Funk"
+        var volume = 1.0
+        /// Ring through Notification Center: a notification on the main screen says what it is for, and macOS keeps it
+        /// quiet in a Focus (Sleep among them), as it does any app's. false plays the sound directly, Focus or not;
+        /// `volume` applies only then.
+        var notify = true
+        /// Play it again until someone uses the Mac's keyboard or mouse, or what it rang for is over: first after
+        /// `repeatSeconds`, each wait half as long again as the last, up to `repeatMaxSeconds`. 0 plays it once.
+        var repeatSeconds = 30.0
+        var repeatMaxSeconds = 180.0
+        /// No sound in the night window (`schedule.dim`).
+        var quietAtNight = true
+    }
 }
 
 // Decoding with per-key defaults: a partial config.json only overrides what it names.
@@ -146,12 +182,14 @@ extension Config {
         weather = try c.get(.weather, d.weather)
         markets = try c.get(.markets, d.markets)
         agents = try c.get(.agents, d.agents)
+        limits = try c.get(.limits, d.limits)
         tokens = try c.get(.tokens, d.tokens)
         dyson = try c.get(.dyson, d.dyson)
         telegram = try c.get(.telegram, d.telegram)
         stats = try c.get(.stats, d.stats)
         music = try c.get(.music, d.music)
         schedule = try c.get(.schedule, d.schedule)
+        alerts = try c.get(.alerts, d.alerts)
     }
 }
 
@@ -217,6 +255,17 @@ extension Config.Agents {
     }
 }
 
+extension Config.Limits {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        claude = try c.get(.claude, d.claude)
+        codex = try c.get(.codex, d.codex)
+        alertBelow = try c.get(.alertBelow, d.alertBelow)
+        jumpOnAlert = try c.get(.jumpOnAlert, d.jumpOnAlert)
+    }
+}
+
 extension Config.Tokens {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -276,6 +325,23 @@ extension Config.Schedule {
         dim = try c.get(.dim, d.dim)
         dimBrightness = try c.get(.dimBrightness, d.dimBrightness)
         dayBrightness = try c.get(.dayBrightness, d.dayBrightness)
+    }
+}
+
+extension Config.Alerts {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        sound = try c.get(.sound, d.sound)
+        card = try c.get(.card, d.card)
+        waiting = try c.get(.waiting, d.waiting)
+        done = try c.get(.done, d.done)
+        limit = try c.get(.limit, d.limit)
+        volume = try c.get(.volume, d.volume)
+        notify = try c.get(.notify, d.notify)
+        repeatSeconds = try c.get(.repeatSeconds, d.repeatSeconds)
+        repeatMaxSeconds = try c.get(.repeatMaxSeconds, d.repeatMaxSeconds)
+        quietAtNight = try c.get(.quietAtNight, d.quietAtNight)
     }
 }
 

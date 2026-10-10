@@ -6,7 +6,7 @@
     "match": "Wokyis",              // part of the screen's name in System Settings > Displays; only it is covered
   },
   "pages": {
-    "order": ["clock", "music", "climate", "markets", "agents", "tokens"],  // all but clock and markets only rotate in when they have data
+    "order": ["clock", "music", "climate", "markets", "agents", "limits", "tokens"],  // all but clock and markets only rotate in when they have data
     "seconds": 12,                  // how long each page stays up
     "durations": { "clock": 15 },   // per-page overrides
   },
@@ -34,6 +34,12 @@
     "jumpOnWaiting": true,          // jump to the agents page when a session needs you
     "jumpOnDone": true,             // ...and briefly when one finishes
     "holdSeconds": 20,              // how long a jump holds the agents page
+  },
+  "limits": {                       // the limits page: what is left of the plans' 5-hour and weekly windows
+    "claude": "~/.local/state/deskdash/limits/claude.json",  // written by hooks/claude-statusline.sh; "" leaves Claude out
+    "codex": "~/.codex",            // Codex's home; its session logs carry the limits after each reply; "" leaves Codex out
+    "alertBelow": 20,               // alert when a window has less than this percent left, once until it resets
+    "jumpOnAlert": true,            // ...and jump to the limits page
   },
   "tokens": {                       // the tokens page: what the coding agents used, by day and all time
     "weeks": 26,                    // weeks of days in the heatmap, 4 to 53
@@ -67,5 +73,17 @@
     "dim": "23:00-08:00",           // the night: draw at dimBrightness in this window ("" = never)
     "dimBrightness": 0.35,          // at night
     "dayBrightness": 1,             // the rest of the day (0.05 to 1, drawn over the page, not the backlight)
+  },
+  "alerts": {                       // when a session needs you, one finishes, or a limit runs low
+    "sound": false,                 // play a sound, again until someone uses the keyboard or mouse
+    "card": false,                  // a card at the top right of the main screen, until it is over or closed
+    "notify": true,                 // ring through Notification Center, which keeps quiet in a Focus; false plays it directly
+    "waiting": "Glass",             // macOS alert sounds by name (/System/Library/Sounds); "" stays quiet
+    "done": "Hero",
+    "limit": "Funk",
+    "volume": 1,                    // only when notify is false
+    "repeatSeconds": 30,            // the first repeat; each wait is half as long again, up to repeatMaxSeconds
+    "repeatMaxSeconds": 180,
+    "quietAtNight": true,           // no sound in schedule.dim's window
   },
 }
