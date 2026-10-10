@@ -15,7 +15,7 @@ A full-screen dashboard for the Wokyis dock's 5" 1280×720 screen: clock and wea
 
 ## Layout
 
-- `Sources/VirtualDisplay/`: an Objective-C wrapper (`DDVirtualDisplay`) for CoreGraphics' private `CGVirtualDisplay`, the one place deskdash uses a private API, and only with `display.virtualMain` on. `Displays.swift` (`DisplayManager`) decides when to add or remove it and moves the main display off the dock screen (`display.keepOffMain`, public API).
+- `Sources/VirtualDisplay/`: an Objective-C wrapper (`DDVirtualDisplay`) for CoreGraphics' private `CGVirtualDisplay`, used only with `display.virtualMain` on. `DDC.swift`: the dock screen's panel power over DDC/CI through IOKit's private IOAVService, used only when the screen goes black with `display.powerOff` on. These are the only private APIs; each degrades to doing nothing. `Displays.swift` (`DisplayManager`) decides when to add or remove it and moves the main display off the dock screen (`display.keepOffMain`, public API).
 - `Sources/deskdash/DeskDash.swift`: entry point, CLI parsing, `ctl` (a distributed notification, not a socket).
 - `AppDelegate.swift`: the borderless panel on the matching screen, its stacking (above or behind other windows), the right-click menu, Quit (which also unloads the LaunchAgent running it), screen hot-plug, the display-sleep assertion, the 1 s tick, config reload, snapshot rendering.
 - `Screens.swift`: which other apps' windows are on a display (`WindowScan`), also behind `deskdash windows`.

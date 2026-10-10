@@ -68,6 +68,8 @@ final class Dashboard {
     /// (`schedule.sleep`). Only the running dashboard decides it (`managesScreen`); snapshots never go black.
     private(set) var screenOff = false
     @ObservationIgnored var managesScreen = false
+    /// The dock screen is the main display, where someone at the Mac works; set by AppDelegate's stacking.
+    @ObservationIgnored var dockIsMain = false
     /// Claude Code's and Codex's tokens by day; nil while the tokens page is off.
     var tokens: TokenHistory?
     /// The token heatmap's top row, as Calendar's weekday (1 is Sunday); nil follows this Mac's calendar.
@@ -139,7 +141,10 @@ final class Dashboard {
         now = Date()
         if let until = doneFlashUntil, now >= until { doneFlashUntil = nil }
         if managesScreen {
-            let off = sleepingNow || idleNow && !alertUp
+            // Sleep hours keep it dark, unless it is the main display and someone is using the Mac: then it is their
+            // screen, and going dark would leave them with nothing to see.
+            let sleeping = sleepingNow && !(dockIsMain && Chime.idleSeconds < 60)
+            let off = sleeping || idleNow && !alertUp
             if off != screenOff { screenOff = off }
         }
         if card != nil, !config.alerts.card || cardFor.map(stillOn) == false { dismissCard() }

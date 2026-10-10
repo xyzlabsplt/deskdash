@@ -11,6 +11,8 @@
     "virtualWidth": 1920,           // its size in points
     "virtualHeight": 1080,
     "virtualHiDPI": false,          // render it at twice that, like a Retina display
+    "powerOff": true,               // when it goes black (schedule.idleMinutes, schedule.sleep), turn the panel off over
+                                    // DDC too, backlight and all, if it takes the command (a private macOS API)
   },
   "pages": {
     "order": ["clock", "music", "photos", "climate", "markets", "agents", "limits", "tokens"],  // all but clock and markets only rotate in when they have data

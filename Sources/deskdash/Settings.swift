@@ -276,8 +276,11 @@ private struct GeneralSettings: View {
                 if !draft.schedule.sleep.isEmpty {
                     WindowPicker(text: model.setting(\.schedule.sleep))
                 }
+                Toggle(L10n.t("Turn the panel itself off, backlight and all, rather than only drawing black"),
+                       isOn: model.setting(\.display.powerOff))
                 Text(L10n.t("The dock screen goes black when no one has used the keyboard or mouse for that long, and comes "
-                    + "back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep."))
+                    + "back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep. "
+                    + "Turning the panel off uses DDC/CI, which most monitors take; it saves the backlight."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

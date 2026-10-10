@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let limits: LimitsService
     private let photos: PhotosService
     private let displays = DisplayManager()
+    /// The dock screen's panel as deskdash last set it over DDC (`display.powerOff`).
+    private var panelOff = false
+    private var terminationSource: DispatchSourceSignal?
     private var window: NSWindow?
     private var displayAssertion: IOPMAssertionID = 0
     private var hiddenUntil: Date?
@@ -65,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             + (launchdJob.map { ", launchd job \($0))" } ?? ")"))
         dash.managesScreen = !options.windowed
         applyConfig()
+        setPanel(on: true)  // in case a previous run was stopped while the panel was off
+        watchTermination()
         agents.start()
         music.start()
         if !options.windowed { installStatusItem() }
@@ -89,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             music.flush()
             if n % 2 == 0 { stats.sample() }
             dash.tick()
+            if dash.screenOff != panelOff { setPanel(on: !dash.screenOff) }
             tokens.tick()
             limits.tick()
             photos.tick()
@@ -175,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard !options.windowed, let panel = window, let screen = target ?? panel.screen,
               let id = screen.displayID else { return }
         let isMain = id == CGMainDisplayID()
+        dash.dockIsMain = isMain
         let others = isMain ? [] : WindowScan.otherAppWindows(on: id, excluding: [panel.windowNumber, dash.callout.windowNumber])
         let level: NSWindow.Level = isMain || !others.isEmpty ? Self.behindWindows : .statusBar
         if panel.level != level { panel.level = level }
@@ -411,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Under a LaunchAgent a plain exit is restarted by KeepAlive, so unload the job first. It loads again at the next
     /// login, or when scripts/install-service.sh runs.
     private func quit() {
+        setPanel(on: true, wait: true)
         if let label = launchdJob {
             log("quit from the dashboard: unloading \(label) until the next login")
             let launchctl = Process()
@@ -442,6 +450,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             displayAssertion = 0
             log("released display-awake hold")
         }
+    }
+
+    // MARK: the dock screen's panel
+
+    /// Turns the dock screen's panel on or off over DDC, off the main thread, when `display.powerOff` is on; turning it
+    /// on always goes through, so a panel left off is never stranded. `wait` blocks until it is done, for quitting.
+    private func setPanel(on: Bool, wait: Bool = false) {
+        panelOff = !on
+        guard on || dash.config.display.powerOff, !options.windowed,
+              let screen = dockScreen, let id = screen.displayID else { return }
+        let work = Task.detached(priority: .userInitiated) { DDC.setPower(on, display: id) }
+        if wait {
+            let done = DispatchSemaphore(value: 0)
+            Task.detached { _ = await work.value; done.signal() }
+            _ = done.wait(timeout: .now() + 1)
+        } else if !on {
+            Task { if await work.value { log("turned the dock screen's panel off") } }
+        }
+    }
+
+    private var dockScreen: NSScreen? {
+        let match = dash.config.display.match.lowercased()
+        return match.isEmpty ? nil : NSScreen.screens.first { $0.localizedName.lowercased().contains(match) }
+    }
+
+    /// launchd stops the service with SIGTERM (an unload, a logout): turn the panel back on first.
+    private func watchTermination() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.setPanel(on: true, wait: true) }
+            exit(0)
+        }
+        source.resume()
+        terminationSource = source
     }
 
     // MARK: control

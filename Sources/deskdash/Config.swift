@@ -33,6 +33,9 @@ struct Config: Codable, Equatable, Sendable {
         var virtualWidth = 1920
         var virtualHeight = 1080
         var virtualHiDPI = false
+        /// When the dock screen goes black (`schedule.idleMinutes`, `schedule.sleep`), also turn its panel off over
+        /// DDC/CI, backlight and all, if it takes the command. Otherwise it is only drawn black.
+        var powerOff = true
     }
 
     struct Pages: Codable, Equatable, Sendable {
@@ -236,6 +239,7 @@ extension Config.Display {
         virtualWidth = try c.get(.virtualWidth, d.virtualWidth)
         virtualHeight = try c.get(.virtualHeight, d.virtualHeight)
         virtualHiDPI = try c.get(.virtualHiDPI, d.virtualHiDPI)
+        powerOff = try c.get(.powerOff, d.powerOff)
     }
 }
 

@@ -69,7 +69,8 @@ enum L10n {
         // Settings
         "Turn the dock screen off when the Mac is unused for": "Mac 閒置多久後關閉擴充座螢幕",
         "Sleep hours": "休眠時間",
-        "The dock screen goes black when no one has used the keyboard or mouse for that long, and comes back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep.": "鍵盤滑鼠閒置超過設定時間，擴充座螢幕就會變全黑；一有操作或 AI 提醒就會亮起。休眠時間內螢幕固定全黑，有提醒也不亮，螢幕也可以進入睡眠。",
+        "The dock screen goes black when no one has used the keyboard or mouse for that long, and comes back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep. Turning the panel off uses DDC/CI, which most monitors take; it saves the backlight.": "鍵盤滑鼠閒置超過設定時間，擴充座螢幕就會關閉；一有操作或 AI 提醒就會亮起。休眠時間內螢幕固定關閉，有提醒也不亮，螢幕也可以進入睡眠。關閉面板是透過 DDC/CI 指令（大多數螢幕都支援），能讓背光真正熄滅、延長壽命。",
+        "Turn the panel itself off, backlight and all, rather than only drawing black": "直接關閉面板（連背光一起關），而不只是畫成全黑",
         "Sources": "資料來源",
         "Claude Code sessions": "Claude Code 工作階段",
         "Codex sessions": "Codex 工作階段",
