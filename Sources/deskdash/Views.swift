@@ -201,7 +201,7 @@ struct ClockPage: View {
             HStack(alignment: .center, spacing: 0) {
                 // The date and city give way to the weather, which is never cut short: they shrink instead.
                 // One Text, so the two shrink together. The city only while its clock reads differently from this
-                // Mac's: Macau's and Taipei's agree.
+                // Mac's: Lisbon's and London's agree.
                 let city = zone.secondsFromGMT(for: now) != TimeZone.current.secondsFromGMT(for: now) ? "  " + Fmt.city(zone) : ""
                 Text("\(Text(Fmt.date(now, zone: zone)).foregroundStyle(Theme.text))\(Text(city).foregroundStyle(Theme.secondary))")
                     .minimumScaleFactor(0.5)
