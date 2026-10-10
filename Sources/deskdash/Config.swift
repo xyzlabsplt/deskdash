@@ -15,6 +15,7 @@ struct Config: Codable, Equatable, Sendable {
     var telegram = Telegram()
     var stats = Stats()
     var music = Music()
+    var photos = Photos()
     var schedule = Schedule()
     var alerts = Alerts()
 
@@ -33,7 +34,7 @@ struct Config: Codable, Equatable, Sendable {
     }
 
     struct Pages: Codable, Equatable, Sendable {
-        var order = ["clock", "music", "climate", "markets", "agents", "limits", "tokens"]  // all but clock and markets only when they have data
+        var order = ["clock", "music", "photos", "climate", "markets", "agents", "limits", "tokens"]  // all but clock and markets only when they have data
         var seconds = 12.0
         var durations: [String: Double] = ["clock": 15]
     }
@@ -147,6 +148,16 @@ struct Config: Codable, Equatable, Sendable {
         var takeoverSeconds = 5.0
     }
 
+    struct Photos: Codable, Equatable, Sendable {
+        /// A folder of pictures (JPEG, HEIC, PNG and the like), its subfolders included, for the photos page. "" has none.
+        var folder = ""
+        var shuffle = true
+        /// Crop each picture to fill the screen. false shows it whole, over a blurred copy of itself.
+        var fill = false
+        /// The time and date in the corner.
+        var clock = true
+    }
+
     struct Schedule: Codable, Equatable, Sendable {
         /// "HH:MM-HH:MM": hold the displays awake in this window. "" never does.
         var keepAwake = "08:00-23:00"
@@ -197,6 +208,7 @@ extension Config {
         telegram = try c.get(.telegram, d.telegram)
         stats = try c.get(.stats, d.stats)
         music = try c.get(.music, d.music)
+        photos = try c.get(.photos, d.photos)
         schedule = try c.get(.schedule, d.schedule)
         alerts = try c.get(.alerts, d.alerts)
     }
@@ -329,6 +341,17 @@ extension Config.Music {
         artwork = try c.get(.artwork, d.artwork)
         takeover = try c.get(.takeover, d.takeover)
         takeoverSeconds = try c.get(.takeoverSeconds, d.takeoverSeconds)
+    }
+}
+
+extension Config.Photos {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        folder = try c.get(.folder, d.folder)
+        shuffle = try c.get(.shuffle, d.shuffle)
+        fill = try c.get(.fill, d.fill)
+        clock = try c.get(.clock, d.clock)
     }
 }
 

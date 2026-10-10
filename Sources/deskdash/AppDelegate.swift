@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let music: NowPlayingService
     private let tokens: TokensService
     private let limits: LimitsService
+    private let photos: PhotosService
     private let displays = DisplayManager()
     private var window: NSWindow?
     private var displayAssertion: IOPMAssertionID = 0
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         music = NowPlayingService(dash: dash)
         tokens = TokensService(dash: dash)
         limits = LimitsService(dash: dash)
+        photos = PhotosService(dash: dash)
         super.init()
     }
 
@@ -88,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             dash.tick()
             tokens.tick()
             limits.tick()
+            photos.tick()
             if n % 5 == 0 {
                 if !options.windowed { displays.check() }
                 let silent = dash.config.alerts.sound && SystemAudio.isSilent
@@ -121,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         stats.apply(dash.config.stats)
         tokens.apply(dash.config.tokens, enabled: dash.config.pages.order.contains("tokens"))
         limits.apply(dash.config.limits, enabled: dash.config.pages.order.contains("limits"))
+        photos.apply(dash.config.photos, enabled: dash.config.pages.order.contains("photos"))
         if !options.windowed { displays.apply(dash.config.display) }
         placeWindow()
         updateDisplayAssertion()
@@ -169,9 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard !options.windowed, let panel = window, let screen = target ?? panel.screen,
               let id = screen.displayID else { return }
         let isMain = id == CGMainDisplayID()
-        let others = isMain ? [] : WindowScan.otherAppWindows(on: id, excluding: panel.windowNumber)
+        let others = isMain ? [] : WindowScan.otherAppWindows(on: id, excluding: [panel.windowNumber, dash.callout.windowNumber])
         let level: NSWindow.Level = isMain || !others.isEmpty ? Self.behindWindows : .statusBar
         if panel.level != level { panel.level = level }
+        dash.setCovering(level == .statusBar && panel.isVisible)
         let note = isMain ? "\(screen.localizedName) is the main display: staying behind windows"
             : others.isEmpty ? "\(screen.localizedName) is clear: covering it"
             : "windows on \(screen.localizedName) (\(Set(others).sorted().joined(separator: ", "))): staying behind them"
@@ -219,7 +224,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func makeContentView() -> NSView {
         let view = DashboardHostingView(rootView: RootView(dash: dash))
-        view.onClick = { [weak self] in self?.dash.advance(1) }
+        view.onClick = { [weak self] in
+            guard let dash = self?.dash else { return }
+            if dash.card != nil { dash.dismissCard() } else { dash.advance(1) }
+        }
         view.contextMenu = { [weak self] in self?.menu(full: false) }
         return view
     }
@@ -540,6 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             dash.stats = .demo
             dash.tokens = .demo(today: LocalDay.of(Date()))
             dash.limits = AgentLimits.demo(now: Date())
+            dash.photo = Photo.demo
             dash.weekStart = 1  // GitHub's Sunday, not this Mac's first weekday
             var track = NowPlaying.demo(now: Date())
             if !dash.config.music.artwork { track?.artwork = nil }
@@ -554,8 +563,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             await stats.prime()
             if dash.config.pages.order.contains("tokens") { await tokens.scanOnce(dash.config.tokens) }
             if dash.config.pages.order.contains("limits") { await limits.readOnce(dash.config.limits) }
+            if dash.config.pages.order.contains("photos") { await photos.loadOnce(dash.config.photos) }
         }
         dash.tick()
+        dash.setCovering(true)  // the card, if any, draws on the page rather than floating over a real screen
         dash.stillFrame = true
         dash.brightnessPreview = 1  // a picture of the page, not of the night: full brightness whatever the hour
         if options.only.contains("telegram"), let channel = dash.config.telegram.channels.first,
@@ -563,6 +574,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             dash.notify([post])
             render(Stage(dash: dash), to: out.appendingPathComponent("telegram.png"))
             dash.clearTelegram()
+        }
+        if options.only.contains("alert") {  // the alert card, over the first page
+            dash.show(dash.pages[0], animated: false)
+            dash.showCard(Dashboard.AlertCard(kind: .waiting, title: "Claude Code needs you",
+                                              body: "Fix the flaky login test · permission prompt · web-app"), for: nil)
+            render(Stage(dash: dash), to: out.appendingPathComponent("alert.png"))
+            dash.dismissCard()
         }
         for page in dash.pages where options.only.isEmpty || options.only.contains(page.name) {
             dash.show(page, animated: false)

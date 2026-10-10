@@ -1,9 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// A card in the top-right corner of the main screen, for `alerts.card`: what needs you, which stays until it is over or
-/// you close it. A notification's banner leaves after a few seconds unless someone sets its style to Persistent in
-/// System Settings; this does not depend on that. It never takes focus, and its × closes it.
+/// The alert card (`alerts.card`) floating at the dock screen's top right, for while windows are on the dock screen and
+/// the dashboard, which otherwise draws the card itself, stays behind them. It never takes focus, and its × closes it.
 @MainActor
 final class Callout {
     @MainActor @Observable
@@ -16,15 +15,19 @@ final class Callout {
     private let model = Model()
     private var panel: NSPanel?
     private(set) var shown = false
+    var onClose: (() -> Void)?
 
-    func show(_ kind: Chime.Kind, title: String, body: String) {
+    /// So the dashboard does not count the card as a window it has to stay behind.
+    var windowNumber: Int { panel?.windowNumber ?? -1 }
+
+    func show(_ kind: Chime.Kind, title: String, body: String, on screen: NSScreen) {
         model.kind = kind
         model.title = title
         model.body = body
         let panel = panel ?? makePanel()
         self.panel = panel
-        place(panel)
-        panel.orderFrontRegardless()
+        place(panel, on: screen)
+        if !shown { panel.orderFrontRegardless() }
         shown = true
     }
 
@@ -43,17 +46,19 @@ final class Callout {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: CalloutView(model: model) { [weak self] in self?.hide() })
+        panel.contentView = NSHostingView(rootView: CalloutView(model: model) { [weak self] in
+            self?.hide()
+            self?.onClose?()
+        })
         return panel
     }
 
-    /// Below the menu bar at the right of the main screen, where notifications come in.
-    private func place(_ panel: NSPanel) {
-        guard let screen = NSScreen.screens.first else { return }
+    /// The dock screen's top right corner.
+    private func place(_ panel: NSPanel, on screen: NSScreen) {
         let size = panel.contentView?.fittingSize ?? NSSize(width: CalloutView.width, height: 96)
         let area = screen.visibleFrame
-        panel.setFrame(NSRect(x: area.maxX - size.width - 14, y: area.maxY - size.height - 14,
-                              width: size.width, height: size.height), display: true)
+        let frame = NSRect(x: area.maxX - size.width - 14, y: area.maxY - size.height - 14, width: size.width, height: size.height)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
 }
 

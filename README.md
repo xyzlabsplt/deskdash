@@ -4,9 +4,9 @@ A glanceable dashboard for the 5" 1280×720 screen on the Wokyis M5, the dock th
 
 One native Swift binary, no dependencies, about 1 KB/s of network, nothing listening on a port. It covers only the screen whose name contains `Wokyis` (Settings can pick another), and hides if that screen goes away. Everything personal, like your city, tickers, channels and purifier, is set in its Settings window and stays on your Mac.
 
-| Clock | Now Playing | Climate | Markets | Agents | Limits | Tokens |
-|---|---|---|---|---|---|---|
-| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![limits](docs/limits.png) | ![tokens](docs/tokens.png) |
+| Clock | Now Playing | Photos | Climate | Markets | Agents | Limits | Tokens |
+|---|---|---|---|---|---|---|---|
+| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![photos](docs/photos.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![limits](docs/limits.png) | ![tokens](docs/tokens.png) |
 
 ## Pages
 
@@ -33,6 +33,7 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
 
   While Music or Spotify plays, a line above them shows the cover, the title and artist, and a thin progress bar. With neither row showing, the time grows back to 360 pt.
 - **Now Playing**: the cover, large, beside the title, artist, album, and a progress bar. This page only rotates in while something plays (see [Now playing](#now-playing-music-and-spotify)).
+- **Photos**: the pictures in a folder you choose (`"photos": { "folder": "~/Pictures/deskdash" }`), its subfolders included: JPEG, HEIC, PNG, TIFF, GIF and WebP. A different one each time the page comes round, shuffled, never the same twice in a row. Each is shown whole over a blurred copy of itself (`photos.fill` crops it to fill the screen instead), with the time and date in the corner (`photos.clock`) and the month it was taken, when the picture says. The next picture is decoded while the page is away, at most 2048 px, so showing it costs nothing, and the folder is listed again every 5 minutes, so new pictures join the rotation on their own. Nothing is copied or cached. To give it more time, set `"pages": { "durations": { "photos": 20 } }`.
 - **Climate**: the purifier's readings, laid out like Dyson's own display. Inside temperature and humidity sit beside their icons. Each pollutant (CO₂, PM2.5, PM10, VOC, NO₂, and formaldehyde on models that measure it) gets a 10-segment level bar: segments 1–3 are the good band (green), 4–6 fair (amber), and 7–10 poor (red), so height and color agree from across the room. The outdoor weather sits in the corner. This page only appears while the purifier is reporting.
 - **Markets**: Hyperliquid perps, three per page by default and up to five, sized to fill the screen: price, 24 h change, and a 24 h sparkline. With one or two on a page, the symbol and change sit above a larger price. Prices stream over Hyperliquid's WebSocket, about one 300-byte message per coin per second, and the screen redraws once a second. Prices dim if the feed goes quiet for a minute.
 - **Agents**: every live Claude Code and Codex session, with what needs you first:
@@ -50,13 +51,13 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
 
 **Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents. When a plan's 5-hour or weekly window drops under 20% left, the limits page shows for 20 s, once per window until it resets.
 
-**Sounds and the alert card.** Off until you turn them on in `config.json` (`"alerts": { "sound": true, "card": true }`). Then each of those alerts also plays a sound (Glass when a session needs you, Hero when one finishes, Funk when a limit runs low; any of macOS's alert sounds by name), and a card at the top right of the main screen says which session and what it waits for. The card never takes focus. It stays until what it is for is over (the session stops waiting, or you pick the finished one up again) or you click its ×.
+**Sounds and the alert card.** Off until you turn them on in `config.json` (`"alerts": { "sound": true, "card": true }`). Then each of those alerts also plays a sound (Glass when a session needs you, Hero when one finishes, Funk when a limit runs low; any of macOS's alert sounds by name), and a card on the dock screen says which session and what it waits for, in type you can read from the chair. It stays until what it is for is over (the session stops waiting, or you pick the finished one up again) or you click the dashboard. While windows are on the dock screen and the dashboard stays behind them, the card floats at the dock screen's top right instead, over those windows, without taking focus; its × closes it.
 
 - The sound repeats until you are back: until anyone uses the Mac's keyboard or mouse, or what it rang for is over. It comes again after 30 s, then each wait is half as long again, up to every 3 minutes (`alerts.repeatSeconds`, `alerts.repeatMaxSeconds`), so a missed one is not the last without it turning into nagging.
 - It rings through Notification Center (`alerts.notify`), as a notification saying what it is for, so macOS keeps it quiet the way it does any app's: in a Focus, Sleep included, and while the Mac is muted. deskdash.app is ad-hoc signed, and macOS keeps Notification Center from apps without a developer signature, so the notification goes through `osascript`'s `display notification` and shows under Script Editor. That is a Standard Addition and needs no Automation permission. Its banner leaves after a few seconds by default; the card is what stays. With `"notify": false` deskdash plays the sound itself at `alerts.volume`, Focus or not.
 - No sound in the night window (`schedule.dim`, 23:00 to 08:00) while `alerts.quietAtNight` is on.
 - While sounds are on and the Mac is muted or turned all the way down, a muted-speaker icon shows in the dock screen's top right corner, since no chime would be heard.
-- `deskdash ctl chime waiting` (or `done`, `limit`) plays one and shows its card, whatever the settings, to try them.
+- `deskdash ctl chime waiting` (or `done`, `limit`) plays one and shows its card, whatever the settings, to try them. `deskdash snapshot alert` renders the card.
 
 **Night.** From 23:00 to 08:00 the dashboard draws at 35% brightness, and at 100% the rest of the day. Settings → General sets both levels. While you drag either slider, the dock screen shows that level, whatever the time, and returns to the schedule's shortly after. The dimming is drawn, as black over the page, because macOS has no public control for this panel's backlight. From 08:00 to 23:00 it keeps the displays from idle-sleeping. macOS can only keep all displays awake, not one, so turn **Keep the displays awake** off in Settings → General if the big monitor should sleep on its own schedule.
 
@@ -191,6 +192,14 @@ swift scripts/fake-track.swift spotify         # pretend Spotify started a track
 ```
 
 `ctl demo` toggles three sample sessions, one of them waiting, to preview the alerts on the real screen. `ctl capture out.png` saves what the live window is showing, without a screen-recording permission.
+
+**Keeping macOS's permissions across rebuilds.** `scripts/build.sh` signs deskdash.app ad hoc, and macOS files privacy permissions (Local Network aside, which follows the bundle ID) under that exact build, so after every rebuild it asks again, for example to read `config.json` when the checkout is on an external drive, and the service waits on the prompt. Run this once to sign with a stable, self-signed identity of your own instead; macOS then asks one last time and keeps the answers:
+
+```bash
+scripts/make-signing-identity.sh   # --remove deletes it
+```
+
+It adds "deskdash local signing" to your login keychain, trusted for nothing, for codesign only. The first build with it asks for your login password, to let codesign use the key; choose Always Allow.
 
 ## Configure
 

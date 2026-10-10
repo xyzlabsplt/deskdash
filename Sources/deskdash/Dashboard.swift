@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 enum Page: Hashable, Sendable {
     case clock
     case music
+    case photos
     case climate
     case markets(Int)
     case agents
@@ -13,6 +15,7 @@ enum Page: Hashable, Sendable {
         switch self {
         case .clock: "clock"
         case .music: "music"
+        case .photos: "photos"
         case .climate: "climate"
         case .markets: "markets"
         case .agents: "agents"
@@ -30,6 +33,7 @@ enum Page: Hashable, Sendable {
         switch self {
         case .clock: "Clock"
         case .music: "Now Playing"
+        case .photos: "Photos"
         case .climate: "Climate"
         case .markets(let i): i == 0 ? "Markets" : "Markets \(i + 1)"
         case .agents: "Agents"
@@ -56,6 +60,8 @@ final class Dashboard {
     var sessions: [AgentSession] = []
     /// Claude Code's and Codex's plan limits, as each last reported them.
     var limits: [AgentLimits] = []
+    /// The picture the photos page shows next; nil without a photos folder.
+    var photo: Photo?
     /// The Mac's sound is muted or all the way down while sounds are on: shown, since no chime would be heard.
     var soundSilent = false
     /// Claude Code's and Codex's tokens by day; nil while the tokens page is off.
@@ -77,9 +83,14 @@ final class Dashboard {
     @ObservationIgnored private var telegramUntil: Date?
     @ObservationIgnored private var announcedTrack: String?
     let chime = Chime()
-    let callout = Callout()
-    /// What the card on the main screen is up for, so it leaves once that is over: nil for one that stays until closed.
-    @ObservationIgnored private var calloutFor: (kind: Chime.Kind, session: String?)?
+    /// The alert card (`alerts.card`): drawn on the dashboard while it covers the dock screen, and otherwise floating
+    /// over the windows on the dock screen (`callout`), until what it is for is over or someone clicks it away.
+    private(set) var card: AlertCard?
+    /// Whether the dashboard covers the dock screen, above everything there; set by AppDelegate's stacking.
+    private(set) var covering = false
+    @ObservationIgnored let callout = Callout()
+    /// What the card is up for, so it leaves once that is over: nil for one that stays until dismissed.
+    @ObservationIgnored private var cardFor: (kind: Chime.Kind, session: String?)?
 
     init(config: Config) {
         self.config = config
@@ -93,6 +104,7 @@ final class Dashboard {
             switch name {
             case "clock": out.append(.clock)
             case "music" where track != nil: out.append(.music)
+            case "photos" where photo != nil: out.append(.photos)
             case "climate" where hasIndoor: out.append(.climate)
             case "markets": out += (0..<marketPageCount).map { Page.markets($0) }
             case "agents" where hasActiveAgents: out.append(.agents)
@@ -122,10 +134,7 @@ final class Dashboard {
     func tick() {
         now = Date()
         if let until = doneFlashUntil, now >= until { doneFlashUntil = nil }
-        if callout.shown, !config.alerts.card || calloutFor.map(stillOn) == false {
-            callout.hide()
-            calloutFor = nil
-        }
+        if card != nil, !config.alerts.card || cardFor.map(stillOn) == false { dismissCard() }
         chime.tick(config.alerts, quiet: quietNow) { kind in
             switch kind {
             case .waiting: anyWaiting
@@ -203,9 +212,46 @@ final class Dashboard {
     private func raise(_ kind: Chime.Kind, title: String, body: String, session: String?) {
         chime.ring(kind, config.alerts, quiet: quietNow, title: title, body: body)
         guard config.alerts.card else { return }
-        if callout.shown, let current = calloutFor, current.kind > kind, stillOn(current) { return }
-        callout.show(kind, title: title, body: body)
-        calloutFor = (kind, session)
+        if let current = card, current.kind > kind, cardFor.map(stillOn) ?? true { return }
+        showCard(AlertCard(kind: kind, title: title, body: body), for: (kind, session))
+    }
+
+    struct AlertCard: Equatable {
+        let kind: Chime.Kind
+        let title: String
+        let body: String
+    }
+
+    func showCard(_ next: AlertCard, for what: (kind: Chime.Kind, session: String?)?) {
+        withAnimation(.easeInOut(duration: 0.3)) { card = next }
+        cardFor = what
+        placeCard()
+    }
+
+    /// A click on the dashboard, or the floating card's ×.
+    func dismissCard() {
+        withAnimation(.easeInOut(duration: 0.3)) { card = nil }
+        cardFor = nil
+        placeCard()
+    }
+
+    func setCovering(_ value: Bool) {
+        guard value != covering else { return }
+        covering = value
+        placeCard()
+    }
+
+    /// On the dashboard while it covers the dock screen; floating at the dock screen's top right while windows are
+    /// there and the dashboard stays behind them.
+    private func placeCard() {
+        let match = config.display.match.lowercased()
+        if let card, !covering, !match.isEmpty,
+           let screen = NSScreen.screens.first(where: { $0.localizedName.lowercased().contains(match) }) {
+            callout.onClose = { [weak self] in self?.dismissCard() }
+            callout.show(card.kind, title: card.title, body: card.body, on: screen)
+        } else if callout.shown {
+            callout.hide()
+        }
     }
 
     /// Whether what a card is up for still holds: the session still waits; the finished one has not been picked up
@@ -229,8 +275,7 @@ final class Dashboard {
         case .limit: "Claude 5-hour limit: 15% left"
         }
         chime.preview(kind, config.alerts, title: title, body: "A preview of deskdash's alert")
-        callout.show(kind, title: title, body: "A preview of deskdash's alert. × closes it.")
-        calloutFor = nil
+        showCard(AlertCard(kind: kind, title: title, body: "A preview of deskdash's alert"), for: nil)
     }
 
     /// The window with the least left, for the limit alert: "Claude 5-hour limit: 15% left".

@@ -127,7 +127,7 @@ struct Options: Sendable {
           Run the dashboard full screen on the display named in config (the login service runs this).
           --windowed shows it in a normal window on the largest screen instead; --demo adds sample agents.
       deskdash snapshot [--config FILE] [--out DIR] [--demo] [--no-agents] [PAGE...]
-          Render pages (clock, music, climate, markets, agents, limits, tokens) to PNG files at 1280x720 and exit. --demo draws
+          Render pages (clock, music, photos, climate, markets, agents, limits, tokens, alert) to PNG files at 1280x720 and exit. --demo draws
           sample sessions, purifier, weather, load, track and tokens instead of this Mac's own; --no-agents draws no
           sessions at all.
           The PAGE `settings` renders each Settings tab (settings-TAB.png, and settings-TAB-end.png for a tall tab

@@ -109,6 +109,10 @@ struct Stage: View {
                     .padding(.trailing, 44)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
+            if let card = dash.card {
+                AlertBanner(card: card)
+                    .transition(.opacity)
+            }
             if let post = dash.telegramPost {
                 TelegramCard(post: post, use24h: dash.config.clock.use24h, zone: Fmt.zone(dash.config.clock.timeZone))
                     .id(post.id)
@@ -142,6 +146,7 @@ struct PageView: View {
         case .clock: ClockPage(dash: dash)
         case .music:
             if let track = dash.track { NowPlayingPage(track: track, now: dash.now) }
+        case .photos: PhotoPage(dash: dash)
         case .climate: ClimatePage(dash: dash)
         case .markets(let i): MarketsPage(dash: dash, symbols: dash.symbols(onPage: i))
         case .agents: AgentsPage(sessions: dash.visibleSessions, now: dash.now, blinkOn: dash.blinkOn)
@@ -924,6 +929,99 @@ struct AttentionFrame: View {
             Rectangle().strokeBorder(Theme.waiting.opacity(strength), lineWidth: 26)
         } else if done {
             Rectangle().strokeBorder(Theme.up.opacity(strength), lineWidth: 18)
+        }
+    }
+}
+
+// MARK: photos
+
+/// A picture from `photos.folder`: whole, over a blurred copy of itself, or cropped to fill (`photos.fill`), with the
+/// time and date in the corner, clear of the agent bars.
+struct PhotoPage: View {
+    let dash: Dashboard
+
+    private static let month: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM yyyy"
+        return f
+    }()
+
+    var body: some View {
+        let size = Theme.canvas
+        ZStack(alignment: .bottomLeading) {
+            if let photo = dash.photo {
+                if let backdrop = photo.backdrop {
+                    Image(decorative: backdrop, scale: 1).resizable().scaledToFill()
+                        .frame(width: size.width, height: size.height).clipped()
+                    Image(decorative: photo.image, scale: 1).resizable().interpolation(.high).scaledToFit()
+                        .frame(width: size.width, height: size.height)
+                } else {
+                    Image(decorative: photo.image, scale: 1).resizable().interpolation(.high).scaledToFill()
+                        .frame(width: size.width, height: size.height).clipped()
+                }
+                if dash.config.photos.clock {
+                    let zone = Fmt.zone(dash.config.clock.timeZone)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(Fmt.time(dash.now, use24h: dash.config.clock.use24h, zone: zone))
+                            .font(Theme.font(120, .bold))
+                            .monospacedDigit()
+                        Text(Fmt.date(dash.now, zone: zone)
+                             + (photo.taken.map { "   " + Self.month.string(from: $0) } ?? ""))
+                            .font(Theme.font(44, .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.75), radius: 14)
+                    .padding(.leading, 56)
+                    .padding(.bottom, 70)  // clear of the agent bars along the bottom edge
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+
+// MARK: alert card
+
+/// The alert card on the dock screen (`alerts.card`): what needs you, large enough to read from the chair, over the page
+/// until it is over or someone clicks the dashboard.
+struct AlertBanner: View {
+    let card: Dashboard.AlertCard
+
+    var body: some View {
+        let color: Color = switch card.kind {
+        case .waiting: Theme.waiting
+        case .done: Theme.up
+        case .limit: Theme.down
+        }
+        ZStack {
+            Color.black.opacity(0.6)
+            HStack(alignment: .top, spacing: 30) {
+                RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 16)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(card.title)
+                        .font(Theme.font(68, .bold))
+                        .foregroundStyle(Theme.text)
+                        .minimumScaleFactor(0.6)
+                    if !card.body.isEmpty {
+                        Text(card.body)
+                            .font(Theme.font(42, .semibold))
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.7)
+                    }
+                    TokenCaption(text: "CLICK TO DISMISS")
+                        .padding(.top, 8)
+                }
+                .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(40)
+            .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 30))
+            .overlay(RoundedRectangle(cornerRadius: 30).strokeBorder(color, lineWidth: 5))
+            .padding(.horizontal, 60)
+            .padding(.bottom, 40)
         }
     }
 }

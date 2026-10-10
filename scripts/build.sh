@@ -20,7 +20,13 @@ mkdir -p "$staging/Contents/MacOS"
 cp .build/release/deskdash "$staging/Contents/MacOS/deskdash"
 cp Support/Info.plist "$staging/Contents/Info.plist"
 plutil -lint -s "$staging/Contents/Info.plist"
-codesign --force --sign - --identifier local.deskdash "$staging"
+# Signed with "deskdash local signing" when scripts/make-signing-identity.sh has made it (or $DESKDASH_SIGN_IDENTITY),
+# so macOS keeps deskdash's privacy permissions across rebuilds; otherwise ad hoc, and they are asked for again.
+identity=${DESKDASH_SIGN_IDENTITY:-}
+if [ -z "$identity" ] && security find-certificate -c "deskdash local signing" >/dev/null 2>&1; then
+  identity="deskdash local signing"
+fi
+codesign --force --sign "${identity:--}" --identifier local.deskdash "$staging"
 
 rm -rf "$app.old"
 [ -d "$app" ] && mv "$app" "$app.old"
