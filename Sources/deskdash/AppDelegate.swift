@@ -17,6 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let stats: SystemStatsService
     private let music: NowPlayingService
     private let tokens: TokensService
+    private let limits: LimitsService
+    private let photos: PhotosService
+    private let displays = DisplayManager()
+    /// The dock screen's panel as deskdash last set it over DDC (`display.powerOff`).
+    private var panelOff = false
+    private var terminationSource: DispatchSourceSignal?
     private var window: NSWindow?
     private var displayAssertion: IOPMAssertionID = 0
     private var hiddenUntil: Date?
@@ -43,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         stats = SystemStatsService(dash: dash)
         music = NowPlayingService(dash: dash)
         tokens = TokensService(dash: dash)
+        limits = LimitsService(dash: dash)
+        photos = PhotosService(dash: dash)
         super.init()
     }
 
@@ -58,7 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // The bundle ID is what macOS's Local Network permission follows; a bare binary has none.
         log("deskdash started as \(Bundle.main.bundleIdentifier ?? "a bare binary, not deskdash.app") (config: \(store.path)"
             + (launchdJob.map { ", launchd job \($0))" } ?? ")"))
+        dash.managesScreen = !options.windowed
         applyConfig()
+        setPanel(on: true)  // in case a previous run was stopped while the panel was off
+        watchTermination()
         agents.start()
         music.start()
         if !options.windowed { installStatusItem() }
@@ -83,7 +94,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             music.flush()
             if n % 2 == 0 { stats.sample() }
             dash.tick()
+            if dash.screenOff != panelOff { setPanel(on: !dash.screenOff) }
             tokens.tick()
+            limits.tick()
+            photos.tick()
+            if n % 5 == 0 {
+                if !options.windowed { displays.check() }
+                let silent = dash.config.alerts.sound && SystemAudio.isSilent
+                if silent != dash.soundSilent { dash.soundSilent = silent }
+            }
             if let until = hiddenUntil, Date() >= until { placeWindow() }
             updateStacking()
             n += 1
@@ -105,19 +124,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func applyConfig() {
+        L10n.apply(dash.config.language)
         markets.apply(symbols: dash.config.markets.symbols)
         weather.apply(dash.config.weather)
         dyson.apply(dash.config.dyson)
         telegram.apply(dash.config.telegram)
         stats.apply(dash.config.stats)
         tokens.apply(dash.config.tokens, enabled: dash.config.pages.order.contains("tokens"))
+        limits.apply(dash.config.limits, enabled: dash.config.pages.order.contains("limits"))
+        photos.apply(dash.config.photos, enabled: dash.config.pages.order.contains("photos"))
+        if !options.windowed { displays.apply(dash.config.display) }
         placeWindow()
         updateDisplayAssertion()
     }
 
     // MARK: window
 
-    @objc private func screensChanged() { placeWindow() }
+    @objc private func screensChanged() {
+        if !options.windowed { displays.check() }
+        placeWindow()
+    }
 
     /// Covers the screen whose name contains `display.match`, and only that one. If it is unplugged the
     /// window hides rather than landing on another display, and comes back when it reappears.
@@ -155,9 +181,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard !options.windowed, let panel = window, let screen = target ?? panel.screen,
               let id = screen.displayID else { return }
         let isMain = id == CGMainDisplayID()
-        let others = isMain ? [] : WindowScan.otherAppWindows(on: id, excluding: panel.windowNumber)
+        dash.dockIsMain = isMain
+        let others = isMain ? [] : WindowScan.otherAppWindows(on: id, excluding: [panel.windowNumber, dash.callout.windowNumber])
         let level: NSWindow.Level = isMain || !others.isEmpty ? Self.behindWindows : .statusBar
         if panel.level != level { panel.level = level }
+        dash.setCovering(level == .statusBar && panel.isVisible)
         let note = isMain ? "\(screen.localizedName) is the main display: staying behind windows"
             : others.isEmpty ? "\(screen.localizedName) is clear: covering it"
             : "windows on \(screen.localizedName) (\(Set(others).sorted().joined(separator: ", "))): staying behind them"
@@ -205,7 +233,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func makeContentView() -> NSView {
         let view = DashboardHostingView(rootView: RootView(dash: dash))
-        view.onClick = { [weak self] in self?.dash.advance(1) }
+        view.onClick = { [weak self] in
+            guard let dash = self?.dash else { return }
+            if dash.card != nil { dash.dismissCard() } else { dash.advance(1) }
+        }
         view.contextMenu = { [weak self] in self?.menu(full: false) }
         return view
     }
@@ -238,18 +269,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func menuItems(full: Bool) -> [NSMenuItem] {
         func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            let item = NSMenuItem(title: L10n.t(title), action: action, keyEquivalent: key)
             item.target = self
             return item
         }
         var items: [NSMenuItem] = []
         if full {
-            let header = NSMenuItem(title: "deskdash: \(dash.page.title) on \(dash.config.display.match)", action: nil, keyEquivalent: "")
+            let header = NSMenuItem(title: L10n.menuHeader(page: dash.page.title, screen: dash.config.display.match),
+                                    action: nil, keyEquivalent: "")
             header.isEnabled = false
-            let pages = NSMenuItem(title: "Show Page", action: nil, keyEquivalent: "")
+            let pages = NSMenuItem(title: L10n.t("Show Page"), action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for page in dash.pages {
-                let entry = item(page.title, #selector(menuShowPage(_:)))
+                let entry = item(L10n.t(page.title), #selector(menuShowPage(_:)))
                 entry.representedObject = page.fileName
                 entry.state = page == dash.page ? .on : .off
                 submenu.addItem(entry)
@@ -263,6 +295,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             pause.state = dash.paused ? .on : .off
             items.append(pause)
         }
+        // In the dashboard's own right-click menu too: with a virtual main display, the menu bar is on a screen that
+        // someone sitting at the dock screen cannot see, and this is the way back.
+        let virtual = item("Virtual Main Display When Alone", #selector(menuToggleVirtual))
+        virtual.state = dash.config.display.virtualMain ? .on : .off
+        items += [.separator(), virtual]
         items.append(.separator())
         items.append(hiddenUntil == nil ? item("Hide for 10 Minutes", #selector(menuHide))
                                         : item("Show Dashboard", #selector(menuShow)))
@@ -276,6 +313,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func menuPrevious() { dash.advance(-1) }
     @objc private func menuTogglePause() { dash.paused.toggle() }
     @objc private func menuHide() { hide(minutes: 10) }
+
+    @objc private func menuToggleVirtual() {
+        var config = dash.config
+        config.display.virtualMain.toggle()
+        commitSettings(config)
+    }
     @objc private func menuSettings() { openSettings() }
     @objc private func menuQuit() { quit() }
 
@@ -375,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Under a LaunchAgent a plain exit is restarted by KeepAlive, so unload the job first. It loads again at the next
     /// login, or when scripts/install-service.sh runs.
     private func quit() {
+        setPanel(on: true, wait: true)
         if let label = launchdJob {
             log("quit from the dashboard: unloading \(label) until the next login")
             let launchctl = Process()
@@ -390,7 +434,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// During `schedule.keepAwake` the displays stay on (macOS cannot keep only one display awake).
     private func updateDisplayAssertion() {
-        let want = !options.windowed && dash.keepAwakeNow
+        // Not in sleep hours: then macOS may sleep the displays as usual.
+        let want = !options.windowed && dash.keepAwakeNow && !dash.sleepingNow
         if want, displayAssertion == 0 {
             var id: IOPMAssertionID = 0
             let result = IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString,
@@ -405,6 +450,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             displayAssertion = 0
             log("released display-awake hold")
         }
+    }
+
+    // MARK: the dock screen's panel
+
+    /// Turns the dock screen's panel on or off over DDC, off the main thread, when `display.powerOff` is on; turning it
+    /// on always goes through, so a panel left off is never stranded. `wait` blocks until it is done, for quitting.
+    private func setPanel(on: Bool, wait: Bool = false) {
+        panelOff = !on
+        guard on || dash.config.display.powerOff, !options.windowed,
+              let screen = dockScreen, let id = screen.displayID else { return }
+        let work = Task.detached(priority: .userInitiated) { DDC.setPower(on, display: id) }
+        if wait {
+            let done = DispatchSemaphore(value: 0)
+            Task.detached { _ = await work.value; done.signal() }
+            _ = done.wait(timeout: .now() + 1)
+        } else if !on {
+            Task { if await work.value { log("turned the dock screen's panel off") } }
+        }
+    }
+
+    private var dockScreen: NSScreen? {
+        let match = dash.config.display.match.lowercased()
+        return match.isEmpty ? nil : NSScreen.screens.first { $0.localizedName.lowercased().contains(match) }
+    }
+
+    /// launchd stops the service with SIGTERM (an unload, a logout): turn the panel back on first.
+    private func watchTermination() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.setPanel(on: true, wait: true) }
+            exit(0)
+        }
+        source.resume()
+        terminationSource = source
     }
 
     // MARK: control
@@ -422,6 +502,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "demo":
             dash.demo.toggle()
             if dash.demo { dash.alert(.waiting) }
+        case "albums": photos.logAlbums()
+        case "chime":
+            let kind: Chime.Kind? = switch argument {
+            case "waiting": .waiting
+            case "done": .done
+            case "limit": .limit
+            default: nil
+            }
+            if let kind { dash.preview(kind) } else { log("ctl: chime waiting | done | limit") }
         case "page":
             if let target = dash.pages.first(where: { $0.name == argument || $0.fileName == argument }) {
                 dash.show(target, hold: 60)
@@ -506,6 +595,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                                      "va10": "12", "noxl": "4", "co2r": "712", "hchr": "9"])
             dash.stats = .demo
             dash.tokens = .demo(today: LocalDay.of(Date()))
+            dash.limits = AgentLimits.demo(now: Date())
+            dash.photo = Photo.demo
             dash.weekStart = 1  // GitHub's Sunday, not this Mac's first weekday
             var track = NowPlaying.demo(now: Date())
             if !dash.config.music.artwork { track?.artwork = nil }
@@ -519,8 +610,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             await stats.prime()
             if dash.config.pages.order.contains("tokens") { await tokens.scanOnce(dash.config.tokens) }
+            if dash.config.pages.order.contains("limits") { await limits.readOnce(dash.config.limits) }
+            if dash.config.pages.order.contains("photos") { await photos.loadOnce(dash.config.photos) }
         }
         dash.tick()
+        L10n.apply(dash.config.language)
+        dash.setCovering(true)  // the card, if any, draws on the page rather than floating over a real screen
         dash.stillFrame = true
         dash.brightnessPreview = 1  // a picture of the page, not of the night: full brightness whatever the hour
         if options.only.contains("telegram"), let channel = dash.config.telegram.channels.first,
@@ -528,6 +623,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             dash.notify([post])
             render(Stage(dash: dash), to: out.appendingPathComponent("telegram.png"))
             dash.clearTelegram()
+        }
+        if options.only.contains("alert") {  // the alert card, over the first page
+            dash.show(dash.pages[0], animated: false)
+            dash.showCard(Dashboard.AlertCard(kind: .waiting, title: L10n.needsYou("Claude Code"),
+                                              body: "Fix the flaky login test · \(L10n.t("permission prompt")) · web-app"), for: nil)
+            render(Stage(dash: dash), to: out.appendingPathComponent("alert.png"))
+            dash.dismissCard()
         }
         for page in dash.pages where options.only.isEmpty || options.only.contains(page.name) {
             dash.show(page, animated: false)

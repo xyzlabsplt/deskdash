@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable {
-    case general, weather, markets, telegram, agents, purifier
+    case general, weather, photos, markets, telegram, agents, alerts, purifier
 }
 
 /// The Settings window's state. It is an @Observable class, not @State: in this SDK @State is a SwiftUI macro,
@@ -21,6 +21,15 @@ final class SettingsModel {
     var telegramStatus = ""
     var titles: [String: String] = [:]
     var host: String
+    /// The photos page's source as chosen here: an album in the Photos app, or a folder. Until an album is picked, the
+    /// setting itself still says folder.
+    var photosFromAlbum: Bool
+    var albums: [String] = []
+    var albumsStatus = ""
+    /// Whether deskdash's Codex hook and Claude status line are installed; nil until looked at.
+    var codexHooks: Bool?
+    var statusLine: Bool?
+    var installNote = ""
     let purifier: PurifierSetup
 
     @ObservationIgnored let dash: Dashboard
@@ -40,6 +49,7 @@ final class SettingsModel {
         self.commit = commit
         self.previewTelegram = previewTelegram
         host = config.dyson.host
+        photosFromAlbum = !config.photos.album.isEmpty || config.photos.folder.isEmpty
         purifier = PurifierSetup(config: config.dyson, changed: purifierChanged)
     }
 
@@ -59,6 +69,47 @@ final class SettingsModel {
     /// A binding to the window's own state (search text and so on).
     func field<T>(_ path: ReferenceWritableKeyPath<SettingsModel, T>) -> Binding<T> {
         Binding(get: { self[keyPath: path] }, set: { self[keyPath: path] = $0 })
+    }
+
+    func checkInstalls() {
+        let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
+        let hooks = (try? String(contentsOfFile: codexHome + "/hooks.json", encoding: .utf8)) ?? ""
+        codexHooks = hooks.contains("agent-status.sh codex")
+        let claude = (try? String(contentsOfFile: NSHomeDirectory() + "/.claude/settings.json", encoding: .utf8)) ?? ""
+        statusLine = claude.contains("claude-statusline.sh")
+    }
+
+    /// Runs one of the checkout's scripts/ (they back up what they change), and shows the last thing it printed.
+    func install(_ script: String) async {
+        installNote = L10n.t("Installing…")
+        let path = Paths.root.appendingPathComponent("scripts/" + script).path
+        let output: String? = await Task.detached {
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [path]
+            process.standardOutput = pipe
+            process.standardError = pipe
+            guard (try? process.run()) != nil else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+        }.value
+        installNote = output?.split(separator: "\n").last.map(String.init) ?? L10n.f("Could not run %@.", script)
+        checkInstalls()
+    }
+
+    /// The Photos app's album names, for the photos tab's picker. Reading them asks for the library the first time.
+    func loadAlbums() async {
+        guard albums.isEmpty else { return }
+        albumsStatus = L10n.t("Reading the Photos app's albums…")
+        switch await PhotoLibrary.list(album: "") {
+        case .denied: albumsStatus = L10n.t("deskdash may not read the Photos library: allow it in System Settings → Privacy & Security → Photos.")
+        case .noAlbum(let names):
+            albums = names
+            albumsStatus = names.isEmpty ? L10n.t("The Photos app has no albums with pictures.") : ""
+        case .pictures: albumsStatus = ""
+        }
     }
 
     /// The dock screen shows a brightness slider's level while it moves, whatever the time of day, and the
@@ -81,28 +132,35 @@ struct SettingsView: View {
     let model: SettingsModel
 
     var body: some View {
+        let _ = model.draft.language  // redraws in the new language when it changes
         TabView(selection: model.field(\.tab)) {
             GeneralSettings(model: model)
-                .tabItem { Label("General", systemImage: "gearshape") }
+                .tabItem { Label(L10n.t("General"), systemImage: "gearshape") }
                 .tag(SettingsTab.general)
             WeatherSettings(model: model)
-                .tabItem { Label("Weather & Time", systemImage: "cloud.sun") }
+                .tabItem { Label(L10n.t("Weather & Time"), systemImage: "cloud.sun") }
                 .tag(SettingsTab.weather)
+            PhotosSettings(model: model)
+                .tabItem { Label(L10n.t("Photos"), systemImage: "photo.on.rectangle") }
+                .tag(SettingsTab.photos)
             MarketsSettings(model: model)
-                .tabItem { Label("Markets", systemImage: "chart.line.uptrend.xyaxis") }
+                .tabItem { Label(L10n.t("Markets"), systemImage: "chart.line.uptrend.xyaxis") }
                 .tag(SettingsTab.markets)
             TelegramSettings(model: model)
-                .tabItem { Label("Telegram", systemImage: "paperplane") }
+                .tabItem { Label(L10n.t("Telegram"), systemImage: "paperplane") }
                 .tag(SettingsTab.telegram)
             AgentsSettings(model: model)
-                .tabItem { Label("Agents", systemImage: "sparkles") }
+                .tabItem { Label(L10n.t("Agents"), systemImage: "sparkles") }
                 .tag(SettingsTab.agents)
+            AlertsSettings(model: model)
+                .tabItem { Label(L10n.t("Alerts"), systemImage: "bell") }
+                .tag(SettingsTab.alerts)
             PurifierSettings(model: model)
-                .tabItem { Label("Purifier", systemImage: "wind") }
+                .tabItem { Label(L10n.t("Purifier"), systemImage: "wind") }
                 .tag(SettingsTab.purifier)
         }
         .padding(16)
-        .frame(width: 640, height: 560)
+        .frame(width: 680, height: 580)
     }
 }
 
@@ -134,72 +192,106 @@ final class SettingsPanel: NSPanel {
 
 private struct GeneralSettings: View {
     let model: SettingsModel
-    private struct PageOption: Identifiable {
+    struct PageOption: Identifiable {
         let id: String
         let title: String
     }
-    private static let pages = [PageOption(id: "clock", title: "Clock"),
-                                PageOption(id: "music", title: "Now Playing (while Music or Spotify plays)"),
-                                PageOption(id: "climate", title: "Climate (from the purifier)"),
-                                PageOption(id: "markets", title: "Markets"), PageOption(id: "agents", title: "Agents"),
-                                PageOption(id: "tokens", title: "Tokens (what the coding agents used)")]
+    /// Built each time, so the titles follow the language.
+    static var pages: [PageOption] {
+        [PageOption(id: "clock", title: L10n.t("Clock")),
+         PageOption(id: "music", title: L10n.t("Now Playing (while Music or Spotify plays)")),
+         PageOption(id: "photos", title: L10n.t("Photos (an album or a folder, under Photos)")),
+         PageOption(id: "climate", title: L10n.t("Climate (from the purifier)")),
+         PageOption(id: "markets", title: L10n.t("Markets")), PageOption(id: "agents", title: L10n.t("Agents")),
+         PageOption(id: "limits", title: L10n.t("Limits (what is left of the Claude and Codex plans)")),
+         PageOption(id: "tokens", title: L10n.t("Tokens (what the coding agents used)"))]
+    }
 
     var body: some View {
         let draft = model.draft
         Form {
-            Section("Dock screen") {
-                Picker("Show the dashboard on", selection: model.setting(\.display.match)) {
-                    ForEach(screenChoices, id: \.self) { Text($0).tag($0) }
+            Section(L10n.t("Language")) {
+                Picker(L10n.t("Pages, menus, alerts and Settings"), selection: model.setting(\.language)) {
+                    Text(L10n.t("Follow macOS")).tag("")
+                    Text("English").tag("en")
+                    Text("繁體中文").tag("zh-Hant")
                 }
             }
-            Section("Pages") {
+            Section(L10n.t("Dock screen")) {
+                Picker(L10n.t("Show the dashboard on"), selection: model.setting(\.display.match)) {
+                    ForEach(screenChoices, id: \.self) { Text($0).tag($0) }
+                }
+                Toggle(L10n.t("Make a connected monitor or iPad the main display"), isOn: model.setting(\.display.keepOffMain))
+                Toggle(L10n.t("Add a virtual main display when the dock screen is the only one"),
+                       isOn: model.setting(\.display.virtualMain))
+                Text(L10n.t("macOS opens windows on the main display, and the dashboard stays behind them there. The virtual "
+                    + "display is for using this Mac remotely (Parsec, Screen Sharing) with no monitor; it uses a private macOS "
+                    + "API. Right-click the dashboard to turn it off."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section(L10n.t("Pages")) {
                 ForEach(Self.pages) { page in
                     Toggle(page.title, isOn: pageShown(page.id))
                 }
-                StepSlider(title: "Each page stays", value: model.setting(\.pages.seconds), steps: StepSlider.pageSeconds)
-                StepSlider(title: "The clock stays", value: clockSeconds, steps: StepSlider.pageSeconds)
+                StepSlider(title: L10n.t("Each page stays"), value: model.setting(\.pages.seconds), steps: StepSlider.pageSeconds)
+                StepSlider(title: L10n.t("The clock stays"), value: clockSeconds, steps: StepSlider.pageSeconds)
             }
-            Section("Clock") {
-                Toggle("24-hour clock", isOn: model.setting(\.clock.use24h))
-                Toggle("CPU, temperature, memory, SSD and network along the bottom", isOn: model.setting(\.stats.enabled))
-                Toggle("What's playing in Music or Spotify", isOn: model.setting(\.music.onClock))
-                LabeledContent("Time zone") {
+            Section(L10n.t("Clock")) {
+                Toggle(L10n.t("24-hour clock"), isOn: model.setting(\.clock.use24h))
+                Toggle(L10n.t("CPU, temperature, memory, SSD and network along the bottom"), isOn: model.setting(\.stats.enabled))
+                Toggle(L10n.t("What's playing in Music or Spotify"), isOn: model.setting(\.music.onClock))
+                LabeledContent(L10n.t("Time zone")) {
                     HStack {
-                        Text(draft.clock.timeZone.isEmpty ? "This Mac's (\(TimeZone.current.identifier))" : draft.clock.timeZone)
+                        Text(draft.clock.timeZone.isEmpty ? L10n.f("This Mac's (%@)", TimeZone.current.identifier) : draft.clock.timeZone)
                         if !draft.clock.timeZone.isEmpty {
-                            Button("Use this Mac's") { model.update { $0.clock.timeZone = "" } }
+                            Button(L10n.t("Use this Mac's")) { model.update { $0.clock.timeZone = "" } }
                         }
                     }
                 }
-                Text("To show another place's time, choose the place under Weather & Time.")
+                Text(L10n.t("To show another place's time, choose the place under Weather & Time."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Now playing") {
-                Toggle("Show each new track full screen", isOn: model.setting(\.music.takeover))
+            Section(L10n.t("Now playing")) {
+                Toggle(L10n.t("Show each new track full screen"), isOn: model.setting(\.music.takeover))
                 if draft.music.takeover {
-                    StepSlider(title: "Shows for", value: model.setting(\.music.takeoverSeconds),
+                    StepSlider(title: L10n.t("Shows for"), value: model.setting(\.music.takeoverSeconds),
                                steps: [2, 3, 4, 5, 6, 8, 10, 12, 15])
                 }
-                Toggle("Look up covers (Spotify, Apple's iTunes Search)", isOn: model.setting(\.music.artwork))
-                Text("Music and Spotify on this Mac announce each track themselves; nothing needs a permission.")
+                Toggle(L10n.t("Look up covers (Spotify, Apple's iTunes Search)"), isOn: model.setting(\.music.artwork))
+                Text(L10n.t("Music and Spotify on this Mac announce each track themselves; nothing needs a permission."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Schedule") {
-                Toggle("Keep the displays awake", isOn: windowOn(\.keepAwake, fallback: "08:00-23:00"))
+            Section(L10n.t("Schedule")) {
+                Toggle(L10n.t("Keep the displays awake"), isOn: windowOn(\.keepAwake, fallback: "08:00-23:00"))
                 if !draft.schedule.keepAwake.isEmpty {
                     WindowPicker(text: model.setting(\.schedule.keepAwake))
                 }
+                StepSlider(title: L10n.t("Turn the dock screen off when the Mac is unused for"),
+                           value: model.setting(\.schedule.idleMinutes), steps: [0, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120],
+                           format: { $0 == 0 ? L10n.t("Never") : "\(Int($0)) " + L10n.t("min") })
+                Toggle(L10n.t("Sleep hours"), isOn: windowOn(\.sleep, fallback: "23:00-08:00"))
+                if !draft.schedule.sleep.isEmpty {
+                    WindowPicker(text: model.setting(\.schedule.sleep))
+                }
+                Toggle(L10n.t("Turn the panel itself off, backlight and all, rather than only drawing black"),
+                       isOn: model.setting(\.display.powerOff))
+                Text(L10n.t("The dock screen goes black when no one has used the keyboard or mouse for that long, and comes "
+                    + "back with any input or alert. In sleep hours it stays black, alerts or not, and the displays may sleep. "
+                    + "Turning the panel off uses DDC/CI, which most monitors take; it saves the backlight."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Section("Brightness") {
-                brightness(draft.schedule.dim.isEmpty ? "All day" : "Daytime", \.dayBrightness)
-                Toggle("Dim the dashboard at night", isOn: windowOn(\.dim, fallback: "23:00-08:00"))
+            Section(L10n.t("Brightness")) {
+                brightness(draft.schedule.dim.isEmpty ? L10n.t("All day") : L10n.t("Daytime"), \.dayBrightness)
+                Toggle(L10n.t("Dim the dashboard at night"), isOn: windowOn(\.dim, fallback: "23:00-08:00"))
                 if !draft.schedule.dim.isEmpty {
                     WindowPicker(text: model.setting(\.schedule.dim))
-                    brightness("At night", \.dimBrightness)
+                    brightness(L10n.t("At night"), \.dimBrightness)
                 }
-                Text("While you drag a slider, the dock screen shows that level.")
+                Text(L10n.t("While you drag a slider, the dock screen shows that level."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -253,8 +345,8 @@ private struct WindowPicker: View {
 
     var body: some View {
         HStack {
-            DatePicker("From", selection: part(0), displayedComponents: .hourAndMinute)
-            DatePicker("to", selection: part(1), displayedComponents: .hourAndMinute)
+            DatePicker(L10n.t("From"), selection: part(0), displayedComponents: .hourAndMinute)
+            DatePicker(L10n.t("to"), selection: part(1), displayedComponents: .hourAndMinute)
         }
     }
 
@@ -284,6 +376,106 @@ private struct WindowPicker: View {
     }
 }
 
+// MARK: Photos
+
+private struct PhotosSettings: View {
+    let model: SettingsModel
+
+    var body: some View {
+        let draft = model.draft
+        Form {
+            Section(L10n.t("Pictures from")) {
+                Picker(L10n.t("Source"), selection: fromAlbum) {
+                    Text(L10n.t("An album in the Photos app")).tag(true)
+                    Text(L10n.t("A folder")).tag(false)
+                }
+                .pickerStyle(.segmented)
+                if model.photosFromAlbum {
+                    Picker(L10n.t("Album"), selection: album) {
+                        if draft.photos.album.isEmpty { Text(L10n.t("Choose an album")).tag("") }
+                        if !draft.photos.album.isEmpty && !model.albums.contains(draft.photos.album) {
+                            Text(draft.photos.album).tag(draft.photos.album)
+                        }
+                        ForEach(model.albums, id: \.self) { Text($0).tag($0) }
+                    }
+                    if !model.albumsStatus.isEmpty {
+                        Text(model.albumsStatus).foregroundStyle(.secondary)
+                    }
+                } else {
+                    LabeledContent(L10n.t("Folder")) {
+                        HStack {
+                            Text(draft.photos.folder.isEmpty ? L10n.t("None yet") : draft.photos.folder)
+                                .truncationMode(.middle)
+                            Button(L10n.t("Choose…"), action: chooseFolder)
+                        }
+                    }
+                }
+            }
+            Section(L10n.t("Showing")) {
+                Toggle(L10n.t("Shuffle"), isOn: model.setting(\.photos.shuffle))
+                Toggle(L10n.t("Crop each picture to fill the screen"), isOn: model.setting(\.photos.fill))
+                Toggle(L10n.t("The time and date in the corner"), isOn: model.setting(\.photos.clock))
+                StepSlider(title: L10n.t("Each picture stays"), value: seconds, steps: StepSlider.pageSeconds)
+            }
+            Text(L10n.t("A different picture each time the page comes round. deskdash only reads the pictures, and keeps no "
+                + "copies; pictures kept only in iCloud are downloaded at the size the dock screen needs."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
+        .task { if model.photosFromAlbum { await model.loadAlbums() } }
+    }
+
+    private var fromAlbum: Binding<Bool> {
+        Binding(get: { model.photosFromAlbum }, set: { on in
+            model.photosFromAlbum = on
+            if on {
+                Task { await model.loadAlbums() }
+            } else {
+                model.update { $0.photos.album = "" }
+            }
+        })
+    }
+
+    /// Picking a source also puts the photos page in the rotation.
+    private var album: Binding<String> {
+        Binding(get: { model.draft.photos.album }, set: { name in
+            model.update { config in
+                config.photos.album = name
+                Self.showPage(&config)
+            }
+        })
+    }
+
+    private var seconds: Binding<Double> {
+        Binding(get: { model.draft.pages.durations["photos"] ?? model.draft.pages.seconds },
+                set: { value in model.update { $0.pages.durations["photos"] = value } })
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.t("Choose")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let home = NSHomeDirectory()
+        let path = url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
+        model.update { config in
+            config.photos.folder = path
+            config.photos.album = ""
+            Self.showPage(&config)
+        }
+    }
+
+    private static func showPage(_ config: inout Config) {
+        guard !config.pages.order.contains("photos") else { return }
+        let order = GeneralSettings.pages.map(\.id)
+        let kept = Set(config.pages.order + ["photos"])
+        config.pages.order = order.filter(kept.contains)
+    }
+}
+
 // MARK: Weather & Time
 
 private struct WeatherSettings: View {
@@ -292,15 +484,15 @@ private struct WeatherSettings: View {
     var body: some View {
         let draft = model.draft
         Form {
-            Section("Location") {
+            Section(L10n.t("Location")) {
                 if let latitude = draft.weather.latitude, let longitude = draft.weather.longitude {
-                    LabeledContent("Showing", value: draft.weather.place.isEmpty ? "A place without a name" : draft.weather.place)
-                    LabeledContent("Coordinates", value: String(format: "%.3f, %.3f", latitude, longitude))
+                    LabeledContent(L10n.t("Showing"), value: draft.weather.place.isEmpty ? L10n.t("A place without a name") : draft.weather.place)
+                    LabeledContent(L10n.t("Coordinates"), value: String(format: "%.3f, %.3f", latitude, longitude))
                 } else {
-                    LabeledContent("Showing", value: "No place yet: find your city below")
+                    LabeledContent(L10n.t("Showing"), value: L10n.t("No place yet: find your city below"))
                 }
-                InputRow(title: "Find a city", prompt: "City name, like Lisbon", text: model.field(\.query),
-                         action: "Search", run: search)
+                InputRow(title: L10n.t("Find a city"), prompt: L10n.t("City name, like Lisbon"), text: model.field(\.query),
+                         action: L10n.t("Search"), run: search)
                 if !model.weatherStatus.isEmpty {
                     Text(model.weatherStatus).foregroundStyle(.secondary)
                 }
@@ -313,12 +505,12 @@ private struct WeatherSettings: View {
                         }
                     }
                 }
-                Toggle("The clock shows this place's time", isOn: clockFollows)
+                Toggle(L10n.t("The clock shows this place's time"), isOn: clockFollows)
                     .disabled(draft.weather.timeZone.isEmpty)
             }
-            Section("Weather") {
-                Toggle("Show outdoor weather", isOn: model.setting(\.weather.enabled))
-                Toggle("Fahrenheit", isOn: model.setting(\.weather.fahrenheit))
+            Section(L10n.t("Weather")) {
+                Toggle(L10n.t("Show outdoor weather"), isOn: model.setting(\.weather.enabled))
+                Toggle(L10n.t("Fahrenheit"), isOn: model.setting(\.weather.fahrenheit))
             }
         }
         .formStyle(.grouped)
@@ -332,12 +524,12 @@ private struct WeatherSettings: View {
     private func search() {
         let name = model.query.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        model.weatherStatus = "Searching…"
+        model.weatherStatus = L10n.t("Searching…")
         Task {
             let found = await Place.search(name)
             model.places = found ?? []
-            model.weatherStatus = found == nil ? "Could not reach Open-Meteo's place search."
-                : model.places.isEmpty ? "No place called “\(name)”." : ""
+            model.weatherStatus = found == nil ? L10n.t("Could not reach Open-Meteo's place search.")
+                : model.places.isEmpty ? L10n.f("No place called “%@”.", name) : ""
         }
     }
 
@@ -352,7 +544,7 @@ private struct WeatherSettings: View {
         }
         model.places = []
         model.query = ""
-        model.weatherStatus = "Now showing \(place.title)."
+        model.weatherStatus = L10n.f("Now showing %@.", place.title)
     }
 }
 
@@ -395,7 +587,7 @@ private struct MarketsSettings: View {
     var body: some View {
         let symbols = model.draft.markets.symbols
         Form {
-            Section("Hyperliquid perps, in order") {
+            Section(L10n.t("Hyperliquid perps, in order")) {
                 ForEach(symbols, id: \.self) { symbol in
                     HStack {
                         Text(symbol).font(.body.monospaced())
@@ -410,15 +602,15 @@ private struct MarketsSettings: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                InputRow(title: "Add a symbol", prompt: "Its Hyperliquid name, like SOL", text: model.field(\.newSymbol),
-                         action: "Add", run: add)
+                InputRow(title: L10n.t("Add a symbol"), prompt: L10n.t("Its Hyperliquid name, like SOL"), text: model.field(\.newSymbol),
+                         action: L10n.t("Add"), run: add)
                 if !model.marketsStatus.isEmpty {
                     Text(model.marketsStatus).foregroundStyle(.secondary)
                 }
             }
             Section {
-                StepSlider(title: "Tickers per page", value: perPage, steps: [1, 2, 3, 4, 5], format: { "\(Int($0))" })
-                Text("Up to five fit on the dock screen, sized to fill it. More symbols make more pages.")
+                StepSlider(title: L10n.t("Tickers per page"), value: perPage, steps: [1, 2, 3, 4, 5], format: { "\(Int($0))" })
+                Text(L10n.t("Up to five fit on the dock screen, sized to fill it. More symbols make more pages."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -444,19 +636,19 @@ private struct MarketsSettings: View {
     private func add() {
         let typed = model.newSymbol.trimmingCharacters(in: .whitespaces)
         guard !typed.isEmpty else { return }
-        model.marketsStatus = "Checking \(typed) on Hyperliquid…"
+        model.marketsStatus = L10n.f("Checking %@ on Hyperliquid…", typed)
         Task {
             guard let listed = await MarketsService.listedSymbols() else {
-                model.marketsStatus = "Could not reach Hyperliquid."
+                model.marketsStatus = L10n.t("Could not reach Hyperliquid.")
                 return
             }
             guard let name = listed.first(where: { $0.caseInsensitiveCompare(typed) == .orderedSame }) else {
-                model.marketsStatus = "Hyperliquid has no perp called \(typed)."
+                model.marketsStatus = L10n.f("Hyperliquid has no perp called %@.", typed)
                 return
             }
             model.update { if !$0.markets.symbols.contains(name) { $0.markets.symbols.append(name) } }
             model.newSymbol = ""
-            model.marketsStatus = "Added \(name)."
+            model.marketsStatus = L10n.f("Added %@.", name)
         }
     }
 }
@@ -469,7 +661,7 @@ private struct TelegramSettings: View {
     var body: some View {
         let draft = model.draft
         Form {
-            Section("Public channels") {
+            Section(L10n.t("Public channels")) {
                 ForEach(draft.telegram.channels, id: \.self) { channel in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
@@ -477,27 +669,27 @@ private struct TelegramSettings: View {
                             Text("t.me/\(channel)").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("Preview") { model.previewTelegram(channel) }
+                        Button(L10n.t("Preview")) { model.previewTelegram(channel) }
                         Button { model.update { $0.telegram.channels.removeAll { $0 == channel } } } label: {
                             Image(systemName: "minus.circle")
                         }
                         .buttonStyle(.borderless)
                     }
                 }
-                InputRow(title: "Add a channel", prompt: "t.me link or @name", text: model.field(\.newChannel),
-                         action: "Add", run: add)
+                InputRow(title: L10n.t("Add a channel"), prompt: L10n.t("t.me link or @name"), text: model.field(\.newChannel),
+                         action: L10n.t("Add"), run: add)
                 if !model.telegramStatus.isEmpty {
                     Text(model.telegramStatus).foregroundStyle(.secondary)
                 }
             }
-            Section("New posts") {
-                StepSlider(title: "Each one shows for", value: model.setting(\.telegram.seconds),
+            Section(L10n.t("New posts")) {
+                StepSlider(title: L10n.t("Each one shows for"), value: model.setting(\.telegram.seconds),
                            steps: [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 45, 60])
-                StepSlider(title: "Check for them every", value: model.setting(\.telegram.pollSeconds),
+                StepSlider(title: L10n.t("Check for them every"), value: model.setting(\.telegram.pollSeconds),
                            steps: [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600])
             }
-            Text("Public channels only: deskdash reads Telegram's public preview page, without an account. "
-                + "Preview shows a channel's newest post on the dock screen.")
+            Text(L10n.t("Public channels only: deskdash reads Telegram's public preview page, without an account. "
+                + "Preview shows a channel's newest post on the dock screen."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -512,23 +704,23 @@ private struct TelegramSettings: View {
     /// Checked by reading the channel's public preview, which also gives its display name.
     private func add() {
         guard let name = TelegramService.username(model.newChannel.trimmingCharacters(in: .whitespaces)) else {
-            model.telegramStatus = "That is not a channel link or name."
+            model.telegramStatus = L10n.t("That is not a channel link or name.")
             return
         }
         guard !model.draft.telegram.channels.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else {
-            model.telegramStatus = "Already watching t.me/\(name)."
+            model.telegramStatus = L10n.f("Already watching t.me/%@.", name)
             return
         }
-        model.telegramStatus = "Checking t.me/\(name)…"
+        model.telegramStatus = L10n.f("Checking t.me/%@…", name)
         Task {
             guard let post = await TelegramService.latest(name) else {
-                model.telegramStatus = "t.me/\(name) has no public preview. Only public channels work."
+                model.telegramStatus = L10n.f("t.me/%@ has no public preview. Only public channels work.", name)
                 return
             }
             model.titles[name] = post.title
             model.update { $0.telegram.channels.append(name) }
             model.newChannel = ""
-            model.telegramStatus = "Added \(post.title)."
+            model.telegramStatus = L10n.f("Added %@.", post.title)
         }
     }
 }
@@ -539,50 +731,143 @@ private struct AgentsSettings: View {
     let model: SettingsModel
 
     var body: some View {
+        let dash = model.dash
+        let claude = dash.limits.first { $0.kind == .claude }
+        let codex = dash.limits.first { $0.kind == .codex }
         Form {
-            Section("Sessions") {
-                Toggle("Show Claude Code sessions", isOn: model.setting(\.agents.claude))
-                StepSlider(title: "A finished session shows DONE for", value: model.setting(\.agents.doneMinutes),
-                           steps: [1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120], format: { "\(Int($0)) min" })
-                StepSlider(title: "Hide idle sessions after", value: model.setting(\.agents.maxIdleHours),
-                           steps: [1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48, 72], format: { "\(Int($0)) h" })
-            }
-            Section("Alerts") {
-                Toggle("Jump to the agents page when a session needs you", isOn: model.setting(\.agents.jumpOnWaiting))
-                Toggle("…and briefly when one finishes", isOn: model.setting(\.agents.jumpOnDone))
-                StepSlider(title: "Hold the agents page for", value: model.setting(\.agents.holdSeconds),
-                           steps: [5, 10, 15, 20, 30, 45, 60, 90, 120])
-            }
-            Section("Token usage") {
-                StepSlider(title: "Weeks in the heatmap", value: weeks, steps: [13, 26, 39, 52], format: { "\(Int($0))" })
-                let history = model.draft.tokens.history
-                Text("Counted from the logs Claude Code, Codex, Gemini CLI and Muse Code keep on this Mac, reading only their "
-                    + "token counts. " + (history.isEmpty ? "" : "Each day's totals are also kept in \(history), since Claude "
-                    + "Code deletes transcripts after 30 days. ") + "The Tokens page is under General → Pages.")
+            Section(L10n.t("Sources")) {
+                SourceRow(title: L10n.t("Claude Code sessions"), ok: model.draft.agents.claude,
+                          status: model.draft.agents.claude
+                              ? L10n.f("Reading · %@ open now", "\(dash.sessions.filter { $0.kind == .claude }.count)")
+                              : L10n.t("Off"))
+                SourceRow(title: L10n.t("Codex sessions"), ok: model.codexHooks == true,
+                          status: model.codexHooks == true ? L10n.t("Hook installed") : L10n.t("Not installed")) {
+                    if model.codexHooks != true {
+                        Button(L10n.t("Install the hook")) { Task { await model.install("install-codex-hooks.sh") } }
+                    }
+                }
+                SourceRow(title: L10n.t("Claude plan limits"), ok: fresh(claude), status: report(claude))
+                SourceRow(title: L10n.t("Codex plan limits"), ok: fresh(codex), status: report(codex))
+                if !model.installNote.isEmpty {
+                    Text(model.installNote).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                Text(L10n.t("Claude's limits update while you talk with Claude in the desktop app, and from the status line "
+                    + "when you use Claude Code in a terminal. Codex reports its limits after each reply, in its own logs.")
+                    + (model.codexHooks == true ? "" : L10n.space + L10n.t("After installing, type /hooks in Codex once to trust it.")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Codex") {
-                Text("Codex sessions appear once deskdash's hook is installed. Run this in Terminal:")
-                    .foregroundStyle(.secondary)
-                CommandRow(command: Self.installHook)
-                Text("Then type /hooks in Codex to trust it.")
+            Section(L10n.t("Sessions")) {
+                Toggle(L10n.t("Show Claude Code sessions"), isOn: model.setting(\.agents.claude))
+                StepSlider(title: L10n.t("A finished session shows DONE for"), value: model.setting(\.agents.doneMinutes),
+                           steps: [1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120], format: { "\(Int($0)) " + L10n.t("min") })
+                StepSlider(title: L10n.t("Hide idle sessions after"), value: model.setting(\.agents.maxIdleHours),
+                           steps: [1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48, 72], format: { "\(Int($0)) " + L10n.t("h") })
+            }
+            Section(L10n.t("Token usage")) {
+                StepSlider(title: L10n.t("Weeks in the heatmap"), value: weeks, steps: [13, 26, 39, 52], format: { "\(Int($0))" })
+                Text(L10n.t("Counted from the logs Claude Code, Codex, Gemini CLI and Muse Code keep on this Mac, reading only "
+                    + "their token counts."))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .task { model.checkInstalls() }
+    }
+
+    /// A report from the last hour.
+    private func fresh(_ limits: AgentLimits?) -> Bool {
+        limits.map { model.dash.now.timeIntervalSince($0.updated) < 3600 } ?? false
+    }
+
+    /// "MAX · updated 5m ago", or that there is none.
+    private func report(_ limits: AgentLimits?) -> String {
+        guard let limits else { return L10n.t("No report yet") }
+        let age = Fmt.duration(model.dash.now.timeIntervalSince(limits.updated))
+        return limits.plan.map { L10n.f("%@ · updated %@ ago", $0.uppercased(), age) } ?? L10n.f("Updated %@ ago", age)
     }
 
     private var weeks: Binding<Double> {
         Binding(get: { Double(model.draft.tokens.span) }, set: { count in model.update { $0.tokens.weeks = Int(count) } })
     }
+}
 
-    /// The script's full path, quoted for the shell if it needs it.
-    private static let installHook: String = {
-        let path = Paths.root.appendingPathComponent("scripts/install-codex-hooks.sh").path
-        let plain = path.allSatisfy { $0.isLetter || $0.isNumber || "/._-+@%".contains($0) }
-        return plain ? path : "'" + path.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
-    }()
+/// One of the places deskdash reads from: a mark for whether it works, what it says, and a button to set it up.
+private struct SourceRow<Action: View>: View {
+    let title: String
+    let ok: Bool
+    let status: String
+    @ViewBuilder var action: () -> Action
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .foregroundStyle(ok ? Color.green : Color.orange)
+                Text(status).foregroundStyle(.secondary)
+                action()
+            }
+        }
+    }
+}
+
+extension SourceRow where Action == EmptyView {
+    init(title: String, ok: Bool, status: String) {
+        self.init(title: title, ok: ok, status: status) { EmptyView() }
+    }
+}
+
+// MARK: Alerts
+
+private struct AlertsSettings: View {
+    let model: SettingsModel
+
+    var body: some View {
+        let alerts = model.draft.alerts
+        Form {
+            Section(L10n.t("Sound")) {
+                Toggle(L10n.t("Play a sound until you are back"), isOn: model.setting(\.alerts.sound))
+                if alerts.sound {
+                    SoundPicker(title: L10n.t("When a session needs you"), name: model.setting(\.alerts.waiting))
+                    SoundPicker(title: L10n.t("When a session finishes"), name: model.setting(\.alerts.done))
+                    SoundPicker(title: L10n.t("When a plan limit runs low"), name: model.setting(\.alerts.limit))
+                    StepSlider(title: L10n.t("Ring again after"), value: model.setting(\.alerts.repeatSeconds),
+                               steps: [0, 15, 20, 30, 45, 60, 90, 120],
+                               format: { $0 == 0 ? L10n.t("Once") : StepSlider.duration($0) })
+                    if alerts.repeatSeconds > 0 {
+                        StepSlider(title: L10n.t("Then at most every"), value: model.setting(\.alerts.repeatMaxSeconds),
+                                   steps: [60, 120, 180, 300, 600, 900])
+                    }
+                    Toggle(L10n.t("Through Notification Center, so a Focus or Sleep keeps it quiet"),
+                           isOn: model.setting(\.alerts.notify))
+                    Toggle(L10n.t("No sound at night"), isOn: model.setting(\.alerts.quietAtNight))
+                }
+                Text(L10n.t("The sound stops when someone uses this Mac's keyboard or mouse."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section(L10n.t("Card")) {
+                Toggle(L10n.t("Show a card on the dock screen until it is over"), isOn: model.setting(\.alerts.card))
+                Text(L10n.t("Click the dashboard to close the card."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section(L10n.t("Jumping to a page")) {
+                Toggle(L10n.t("Jump to the agents page when a session needs you"), isOn: model.setting(\.agents.jumpOnWaiting))
+                Toggle(L10n.t("…and briefly when one finishes"), isOn: model.setting(\.agents.jumpOnDone))
+                StepSlider(title: L10n.t("Hold the agents page for"), value: model.setting(\.agents.holdSeconds),
+                           steps: [5, 10, 15, 20, 30, 45, 60, 90, 120])
+            }
+            Section(L10n.t("Plan limits")) {
+                StepSlider(title: L10n.t("Alert when less than this is left"), value: model.setting(\.limits.alertBelow),
+                           steps: [0, 5, 10, 15, 20, 25, 30, 40, 50],
+                           format: { $0 == 0 ? L10n.t("Never") : "\(Int($0))%" })
+                Toggle(L10n.t("…and jump to the limits page"), isOn: model.setting(\.limits.jumpOnAlert))
+            }
+        }
+        .formStyle(.grouped)
+    }
 }
 
 // MARK: Purifier
@@ -642,7 +927,7 @@ final class PurifierSetup {
     func connectWithSticker(_ cfg: Config.Dyson) {
         guard !busy, !stickerPassword.isEmpty else { return }
         guard var device = stickerDevice else {
-            return report("That is not a Dyson Wi-Fi name. It looks like DYSON-XXX-XX-XXXXXXXX-664.", failed: true)
+            return report(L10n.t("That is not a Dyson Wi-Fi name. It looks like DYSON-XXX-XX-XXXXXXXX-664."), failed: true)
         }
         device.credential = DysonSetup.credential(stickerPassword: stickerPassword)
         stickerPassword = ""
@@ -654,16 +939,16 @@ final class PurifierSetup {
         let country = country.trimmingCharacters(in: .whitespaces).uppercased()
         guard !busy else { return }
         guard DysonSetup.isEmail(email) else {
-            return report("Type the whole email address you sign in to the Dyson app with.", failed: true)
+            return report(L10n.t("Type the whole email address you sign in to the Dyson app with."), failed: true)
         }
         busy = true
-        report("Asking Dyson to email a code…")
+        report(L10n.t("Asking Dyson to email a code…"))
         Task {
             do {
                 challenge = try await DysonSetup.requestCode(email: email,
                                                              country: country.isEmpty ? DysonSetup.defaultCountry : country)
                 code = ""
-                report("Dyson has emailed a one-time code to \(email).")
+                report(L10n.f("Dyson has emailed a one-time code to %@.", email))
             } catch {
                 report("\(error)", failed: true)
             }
@@ -676,7 +961,7 @@ final class PurifierSetup {
         let password = accountPassword
         accountPassword = ""
         busy = true
-        report("Signing in to Dyson…")
+        report(L10n.t("Signing in to Dyson…"))
         Task {
             do {
                 let token = try await DysonSetup.signIn(email: email.trimmingCharacters(in: .whitespaces), password: password,
@@ -690,7 +975,7 @@ final class PurifierSetup {
                 } else {
                     choices = devices
                     chosen = devices[0].serial
-                    report("None of the account's \(devices.count) devices answered on this network. Choose the purifier.")
+                    report(L10n.f("None of the account's %@ devices answered on this network. Choose the purifier.", "\(devices.count)"))
                 }
             } catch {
                 busy = false
@@ -725,14 +1010,14 @@ final class PurifierSetup {
         }
         saved = nil
         changing = false
-        report("Forgot the purifier. Its password is deleted from this Mac.")
+        report(L10n.t("Forgot the purifier. Its password is deleted from this Mac."))
         changed()
     }
 
     /// Proves the password by reading the sensors once, then saves it, as `deskdash dyson setup` does.
     private func finish(_ device: DysonCredentials, _ cfg: Config.Dyson) async {
         busy = true
-        report("Trying the password with \(device.name). This can take up to 30 s…")
+        report(L10n.f("Trying the password with %@. This can take up to 30 s…", device.name))
         let result = await DysonSetup.testAndSave(device, host: cfg.host, to: Paths.resolve(cfg.credentials))
         busy = false
         report(result.message, failed: !result.saved)
@@ -754,39 +1039,39 @@ private struct PurifierSettings: View {
     var body: some View {
         let setup = model.purifier
         Form {
-            Section("Dyson purifier") {
-                Toggle("Read the purifier's sensors", isOn: model.setting(\.dyson.enabled))
-                LabeledContent("Status", value: status)
-                LabeledContent("Purifier") {
+            Section(L10n.t("Dyson purifier")) {
+                Toggle(L10n.t("Read the purifier's sensors"), isOn: model.setting(\.dyson.enabled))
+                LabeledContent(L10n.t("Status"), value: status)
+                LabeledContent(L10n.t("Purifier")) {
                     if let device = setup.saved {
                         HStack(spacing: 8) {
                             Text("\(device.name) · \(device.serial)")
                             if setup.confirmForget {
-                                Button("Cancel") { setup.confirmForget = false }
-                                Button("Forget", role: .destructive) { setup.forget(model.draft.dyson) }
+                                Button(L10n.t("Cancel")) { setup.confirmForget = false }
+                                Button(L10n.t("Forget"), role: .destructive) { setup.forget(model.draft.dyson) }
                             } else {
                                 if !setup.changing {
-                                    Button("Change…") { setup.changing = true }
+                                    Button(L10n.t("Change…")) { setup.changing = true }
                                 }
-                                Button("Forget…") { setup.confirmForget = true }
+                                Button(L10n.t("Forget…")) { setup.confirmForget = true }
                             }
                         }
                     } else {
-                        Text("None yet")
+                        Text(L10n.t("None yet"))
                     }
                 }
                 if setup.confirmForget {
-                    Text("Forgetting deletes the purifier's password from this Mac. Connecting it again takes the sticker "
-                        + "or your Dyson account.")
+                    Text(L10n.t("Forgetting deletes the purifier's password from this Mac. Connecting it again takes the "
+                        + "sticker or your Dyson account."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             if setup.saved == nil || setup.changing {
-                Section(setup.saved == nil ? "Connect the purifier" : "Connect another purifier") {
-                    Picker("Its password from", selection: model.field(\.purifier.method)) {
-                        Text("The Wi-Fi sticker").tag(PurifierSetup.Method.sticker)
-                        Text("Your Dyson account").tag(PurifierSetup.Method.account)
+                Section(setup.saved == nil ? L10n.t("Connect the purifier") : L10n.t("Connect another purifier")) {
+                    Picker(L10n.t("Its password from"), selection: model.field(\.purifier.method)) {
+                        Text(L10n.t("The Wi-Fi sticker")).tag(PurifierSetup.Method.sticker)
+                        Text(L10n.t("Your Dyson account")).tag(PurifierSetup.Method.account)
                     }
                     .pickerStyle(.segmented)
                     if setup.method == .sticker {
@@ -803,11 +1088,11 @@ private struct PurifierSettings: View {
                         .textSelection(.enabled)
                 }
             }
-            Section("Network") {
-                InputRow(title: "Address", prompt: "Found automatically", text: model.field(\.host),
-                         action: "Apply", ready: model.host.trimmingCharacters(in: .whitespaces) != model.draft.dyson.host,
+            Section(L10n.t("Network")) {
+                InputRow(title: L10n.t("Address"), prompt: L10n.t("Found automatically"), text: model.field(\.host),
+                         action: L10n.t("Apply"), ready: model.host.trimmingCharacters(in: .whitespaces) != model.draft.dyson.host,
                          run: applyHost)
-                Text("Leave the address blank unless the purifier cannot be found: then type its IP address or host[:port].")
+                Text(L10n.t("Leave the address blank unless the purifier cannot be found: then type its IP address or host[:port]."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -820,19 +1105,19 @@ private struct PurifierSettings: View {
     /// sticker's Wi-Fi name.
     @ViewBuilder private func sticker(_ setup: PurifierSetup) -> some View {
         if !setup.found.isEmpty {
-            Picker("Purifier", selection: model.field(\.purifier.target)) {
+            Picker(L10n.t("Purifier"), selection: model.field(\.purifier.target)) {
                 ForEach(setup.found, id: \.serial) { Text("\($0.name) · \($0.serial)").tag($0.serial) }
-                Text("Another: type its Wi-Fi name").tag("")
+                Text(L10n.t("Another: type its Wi-Fi name")).tag("")
             }
         }
         if setup.found.isEmpty || setup.target.isEmpty {
-            InputRow(title: "Wi-Fi name", prompt: "DYSON-XXX-XX-XXXXXXXX-664", text: model.field(\.purifier.ssid))
+            InputRow(title: L10n.t("Wi-Fi name"), prompt: L10n.t("DYSON-XXX-XX-XXXXXXXX-664"), text: model.field(\.purifier.ssid))
         }
-        InputRow(title: "Wi-Fi password", prompt: "As printed on the sticker", text: model.field(\.purifier.stickerPassword),
-                 secure: true, action: "Connect",
+        InputRow(title: L10n.t("Wi-Fi password"), prompt: L10n.t("As printed on the sticker"), text: model.field(\.purifier.stickerPassword),
+                 secure: true, action: L10n.t("Connect"),
                  ready: !setup.busy && !setup.stickerPassword.isEmpty && (!setup.target.isEmpty || !setup.ssid.isEmpty),
                  run: { setup.connectWithSticker(model.draft.dyson) })
-        Text("The sticker is on the purifier, and on the back of its manual. No Dyson account involved.")
+        Text(L10n.t("The sticker is on the purifier, and on the back of its manual. No Dyson account involved."))
             .font(.caption)
             .foregroundStyle(.secondary)
     }
@@ -840,36 +1125,36 @@ private struct PurifierSettings: View {
     /// A one-time code by email, then the account password, which reads the purifier's password off the account.
     @ViewBuilder private func account(_ setup: PurifierSetup) -> some View {
         if !setup.choices.isEmpty {
-            Picker("Purifier", selection: model.field(\.purifier.chosen)) {
+            Picker(L10n.t("Purifier"), selection: model.field(\.purifier.chosen)) {
                 ForEach(setup.choices, id: \.serial) { Text("\($0.name) · \($0.serial)").tag($0.serial) }
             }
             HStack {
                 Spacer()
-                Button("Start Over", action: setup.startOver)
-                Button("Connect") { setup.connectChosen(model.draft.dyson) }
+                Button(L10n.t("Start Over"), action: setup.startOver)
+                Button(L10n.t("Connect")) { setup.connectChosen(model.draft.dyson) }
                     .buttonStyle(.borderedProminent)
                     .disabled(setup.busy)
             }
         } else if setup.challenge == nil {
-            InputRow(title: "Country", prompt: "Two letters, like US", text: model.field(\.purifier.country))
-            InputRow(title: "Email", prompt: "you@example.com", text: model.field(\.purifier.email),
-                     action: "Send Code", ready: !setup.busy && DysonSetup.isEmail(setup.email), run: setup.requestCode)
-            Text("The email you sign in to the Dyson app with. Dyson emails it a one-time code; your account password is "
-                + "then used once, to sign in, and never saved.")
+            InputRow(title: L10n.t("Country"), prompt: L10n.t("Two letters, like US"), text: model.field(\.purifier.country))
+            InputRow(title: L10n.t("Email"), prompt: L10n.t("you@example.com"), text: model.field(\.purifier.email),
+                     action: L10n.t("Send Code"), ready: !setup.busy && DysonSetup.isEmail(setup.email), run: setup.requestCode)
+            Text(L10n.t("The email you sign in to the Dyson app with. Dyson emails it a one-time code; your account "
+                + "password is then used once, to sign in, and never saved."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            InputRow(title: "Code", prompt: "From Dyson's email", text: model.field(\.purifier.code))
-            InputRow(title: "Password", prompt: "Your Dyson account's", text: model.field(\.purifier.accountPassword),
-                     secure: true, action: "Sign In",
+            InputRow(title: L10n.t("Code"), prompt: L10n.t("From Dyson's email"), text: model.field(\.purifier.code))
+            InputRow(title: L10n.t("Password"), prompt: L10n.t("Your Dyson account's"), text: model.field(\.purifier.accountPassword),
+                     secure: true, action: L10n.t("Sign In"),
                      ready: !setup.busy && !setup.code.isEmpty && !setup.accountPassword.isEmpty,
                      run: { setup.signIn(model.draft.dyson) })
             HStack {
-                Text("Used once, to sign in, and never saved.")
+                Text(L10n.t("Used once, to sign in, and never saved."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Start Over", action: setup.startOver)
+                Button(L10n.t("Start Over"), action: setup.startOver)
                     .disabled(setup.busy)
             }
         }
@@ -881,11 +1166,11 @@ private struct PurifierSettings: View {
     }
 
     private var status: String {
-        guard model.draft.dyson.enabled else { return "Off" }
-        guard model.purifier.saved != nil else { return "Not connected yet" }
-        guard let reading = model.dash.indoor else { return "No readings yet" }
+        guard model.draft.dyson.enabled else { return L10n.t("Off") }
+        guard model.purifier.saved != nil else { return L10n.t("Not connected yet") }
+        guard let reading = model.dash.indoor else { return L10n.t("No readings yet") }
         let age = Int(model.dash.now.timeIntervalSince(reading.updated))
-        return age < 120 ? "Reporting (last reading \(age) s ago)" : "Last reading \(age / 60) min ago"
+        return age < 120 ? L10n.f("Reporting (last reading %@ s ago)", "\(age)") : L10n.f("Last reading %@ min ago", "\(age / 60)")
     }
 }
 
@@ -904,7 +1189,7 @@ private struct StepSlider: View {
 
     /// "45 s", "90 s", "3 min".
     nonisolated static func duration(_ seconds: Double) -> String {
-        seconds >= 120 && seconds.truncatingRemainder(dividingBy: 60) == 0 ? "\(Int(seconds / 60)) min" : "\(Int(seconds)) s"
+        seconds >= 120 && seconds.truncatingRemainder(dividingBy: 60) == 0 ? "\(Int(seconds / 60)) " + L10n.t("min") : "\(Int(seconds)) " + L10n.t("s")
     }
 
     var body: some View {
@@ -963,6 +1248,34 @@ private struct InputRow: View {
     }
 }
 
+/// One of macOS's alert sounds, or none, with a button that plays it.
+private struct SoundPicker: View {
+    let title: String
+    @Binding var name: String
+
+    static let names: [String] = {
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: "/System/Library/Sounds")) ?? []
+        return files.filter { $0.hasSuffix(".aiff") }.map { String($0.dropLast(5)) }.sorted()
+    }()
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                Picker(title, selection: $name) {
+                    Text(L10n.t("None")).tag("")
+                    ForEach(Self.names, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+                Button { NSSound(named: NSSound.Name(name))?.play() } label: { Image(systemName: "play.fill") }
+                    .buttonStyle(.borderless)
+                    .disabled(name.isEmpty)
+                    .help(L10n.t("Play"))
+            }
+        }
+    }
+}
+
 /// A command for Terminal, with a button that copies it.
 private struct CommandRow: View {
     let command: String
@@ -973,7 +1286,7 @@ private struct CommandRow: View {
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
             Spacer()
-            Button("Copy") {
+            Button(L10n.t("Copy")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(command, forType: .string)
             }

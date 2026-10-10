@@ -83,6 +83,14 @@ struct Stage: View {
     let dash: Dashboard
 
     var body: some View {
+        if dash.screenOff {
+            Color.black  // nothing else drawn, so a black screen costs nothing
+        } else {
+            stage
+        }
+    }
+
+    private var stage: some View {
         ZStack {
             Color.black
             PageView(dash: dash, page: dash.page)
@@ -101,6 +109,18 @@ struct Stage: View {
                     .frame(maxHeight: .infinity, alignment: .bottom)
             }
             AttentionFrame(waiting: dash.anyWaiting, done: dash.doneFlash, blinkOn: dash.blinkOn)
+            if dash.soundSilent {  // sounds are on, but the Mac is muted: no chime would be heard
+                Image(systemName: "speaker.slash.fill")
+                    .font(.system(size: 44, weight: .bold))
+                    .foregroundStyle(Theme.waiting)
+                    .padding(.top, 36)
+                    .padding(.trailing, 44)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+            if let card = dash.card {
+                AlertBanner(card: card)
+                    .transition(.opacity)
+            }
             if let post = dash.telegramPost {
                 TelegramCard(post: post, use24h: dash.config.clock.use24h, zone: Fmt.zone(dash.config.clock.timeZone))
                     .id(post.id)
@@ -134,9 +154,11 @@ struct PageView: View {
         case .clock: ClockPage(dash: dash)
         case .music:
             if let track = dash.track { NowPlayingPage(track: track, now: dash.now) }
+        case .photos: PhotoPage(dash: dash)
         case .climate: ClimatePage(dash: dash)
         case .markets(let i): MarketsPage(dash: dash, symbols: dash.symbols(onPage: i))
         case .agents: AgentsPage(sessions: dash.visibleSessions, now: dash.now, blinkOn: dash.blinkOn)
+        case .limits: LimitsPage(dash: dash)
         case .tokens: TokensPage(dash: dash)
         }
     }
@@ -177,17 +199,22 @@ struct ClockPage: View {
             .padding(.bottom, -size / 12)
 
             HStack(alignment: .center, spacing: 0) {
-                Text(Fmt.date(now, zone: zone))
-                    .foregroundStyle(Theme.text)
-                if zone != .current {
-                    Text("  " + Fmt.city(zone)).foregroundStyle(Theme.secondary)
-                }
+                // The date and city give way to the weather, which is never cut short: they shrink instead.
+                // One Text, so the two shrink together. The city only while its clock reads differently from this
+                // Mac's: Lisbon's and London's agree.
+                let city = zone.secondsFromGMT(for: now) != TimeZone.current.secondsFromGMT(for: now) ? "  " + Fmt.city(zone) : ""
+                Text("\(Text(Fmt.date(now, zone: zone)).foregroundStyle(Theme.text))\(Text(city).foregroundStyle(Theme.secondary))")
+                    .minimumScaleFactor(0.5)
                 Spacer(minLength: 40)
-                if dash.hasIndoor, let indoor = dash.indoor {
-                    IndoorBadge(reading: indoor, fahrenheit: dash.config.weather.fahrenheit)
-                } else if dash.weather != nil || dash.config.weather.coordinates != nil {
-                    WeatherBadge(reading: dash.weather)  // "– –" until the first reading, none without a place
+                Group {
+                    if dash.hasIndoor, let indoor = dash.indoor {
+                        IndoorBadge(reading: indoor, fahrenheit: dash.config.weather.fahrenheit)
+                    } else if dash.weather != nil || dash.config.weather.coordinates != nil {
+                        WeatherBadge(reading: dash.weather)  // "– –" until the first reading, none without a place
+                    }
                 }
+                .fixedSize()
+                .layoutPriority(1)
             }
             .font(Theme.font(80, .semibold))
             .lineLimit(1)
@@ -227,7 +254,7 @@ struct StatsRow: View {
                       color: Theme.quality(cpu, fair: 0.7, poor: 0.9))
             Spacer(minLength: 20)
             if let celsius = stats.temperature {
-                StatMeter(label: "TEMP", value: Fmt.degrees(celsius, fahrenheit: fahrenheit), unit: "°",
+                StatMeter(label: L10n.t("TEMP"), value: Fmt.degrees(celsius, fahrenheit: fahrenheit), unit: "°",
                           fraction: celsius / 100, color: Theme.color(stats.thermal))
                 Spacer(minLength: 20)
             }
@@ -506,7 +533,7 @@ struct ClimatePage: View {
                 Spacer(minLength: 30)
                 if let w = dash.weather {
                     VStack(alignment: .trailing, spacing: 0) {
-                        Text("OUTSIDE").font(Theme.font(26, .heavy)).tracking(2)
+                        Text(L10n.t("OUTSIDE")).font(Theme.font(26, .heavy)).tracking(2)
                         HStack(spacing: 10) {
                             Image(systemName: w.symbol).symbolRenderingMode(.multicolor)
                             Text("\(Int(w.temperature.rounded()))°  \(Int(w.humidity.rounded()))%").monospacedDigit()
@@ -517,7 +544,7 @@ struct ClimatePage: View {
                 }
             }
             if r?.sensorsOff == true {
-                Text("Sensors are off: turn on Continuous Monitoring in the Dyson app")
+                Text(L10n.t("Sensors are off: turn on Continuous Monitoring in the Dyson app"))
                     .font(Theme.font(38, .semibold))
                     .foregroundStyle(Theme.secondary)
                     .frame(maxHeight: .infinity)
@@ -831,7 +858,7 @@ struct AgentsPage: View {
         VStack(alignment: .leading, spacing: 20) {
             ForEach(shown) { AgentRow(session: $0, now: now, blinkOn: blinkOn) }
             if sessions.count > shown.count {
-                Text("+\(sessions.count - shown.count) more")
+                Text(L10n.more(sessions.count - shown.count))
                     .font(Theme.font(38, .semibold))
                     .foregroundStyle(Theme.secondary)
                     .padding(.leading, 44)
@@ -852,7 +879,7 @@ struct AgentRow: View {
         // Most useful first, since the line truncates: what it waits for beats which project it is.
         let waiting = session.state == .waiting
         let facts = [Fmt.duration(now.timeIntervalSince(session.since)),
-                     waiting ? session.detail : nil, session.project, waiting ? nil : session.detail]
+                     waiting ? session.detail.map(L10n.t) : nil, session.project, waiting ? nil : session.detail]
             .compactMap { $0 }.filter { !$0.isEmpty && $0 != session.name }
         HStack(spacing: 28) {
             RoundedRectangle(cornerRadius: 8)
@@ -919,6 +946,276 @@ struct AttentionFrame: View {
     }
 }
 
+// MARK: photos
+
+/// A picture from `photos.folder`: whole, over a blurred copy of itself, or cropped to fill (`photos.fill`), with the
+/// time and date in the corner, clear of the agent bars.
+struct PhotoPage: View {
+    let dash: Dashboard
+
+    var body: some View {
+        let size = Theme.canvas
+        ZStack(alignment: .bottomLeading) {
+            if let photo = dash.photo {
+                if let backdrop = photo.backdrop {
+                    Image(decorative: backdrop, scale: 1).resizable().scaledToFill()
+                        .frame(width: size.width, height: size.height).clipped()
+                    Image(decorative: photo.image, scale: 1).resizable().interpolation(.high).scaledToFit()
+                        .frame(width: size.width, height: size.height)
+                } else {
+                    Image(decorative: photo.image, scale: 1).resizable().interpolation(.high).scaledToFill()
+                        .frame(width: size.width, height: size.height).clipped()
+                }
+                if dash.config.photos.clock {
+                    let zone = Fmt.zone(dash.config.clock.timeZone)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(Fmt.time(dash.now, use24h: dash.config.clock.use24h, zone: zone))
+                            .font(Theme.font(120, .bold))
+                            .monospacedDigit()
+                        Text(Fmt.date(dash.now, zone: zone)
+                             + (photo.taken.map { "   " + Fmt.month($0) } ?? ""))
+                            .font(Theme.font(44, .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.75), radius: 14)
+                    .padding(.leading, 56)
+                    .padding(.bottom, 70)  // clear of the agent bars along the bottom edge
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+
+// MARK: alert card
+
+/// The alert card on the dock screen (`alerts.card`): what needs you, large enough to read from the chair, over the page
+/// until it is over or someone clicks the dashboard.
+struct AlertBanner: View {
+    let card: Dashboard.AlertCard
+
+    var body: some View {
+        let color: Color = switch card.kind {
+        case .waiting: Theme.waiting
+        case .done: Theme.up
+        case .limit: Theme.down
+        }
+        ZStack {
+            Color.black.opacity(0.6)
+            HStack(alignment: .top, spacing: 30) {
+                RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 16)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(card.title)
+                        .font(Theme.font(68, .bold))
+                        .foregroundStyle(Theme.text)
+                        .minimumScaleFactor(0.6)
+                    if !card.body.isEmpty {
+                        Text(card.body)
+                            .font(Theme.font(42, .semibold))
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.7)
+                    }
+                    TokenCaption(text: L10n.t("CLICK TO DISMISS"))
+                        .padding(.top, 8)
+                }
+                .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(40)
+            .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 30))
+            .overlay(RoundedRectangle(cornerRadius: 30).strokeBorder(color, lineWidth: 5))
+            .padding(.horizontal, 60)
+            .padding(.bottom, 40)
+        }
+    }
+}
+
+// MARK: limits
+
+/// Each agent's plan limits side by side: what is left of the 5-hour window large, the week under it. Each bar has a
+/// white tick where an even pace would leave it, so a bar reaching past its tick has room to spare. Amber means it
+/// runs out before it resets at the pace so far, or is nearly gone; red, almost nothing is left.
+/// Each agent's plan limits in a column, in the same rows for every agent: the 5-hour window, then the week, all at one
+/// size, so the same window sits side by side. A window an agent's plan does not have (Codex Pro has only the week)
+/// leaves its place, marked; a row no agent has is left out. Each bar has a white tick where an even pace would leave
+/// it, so a bar reaching past its tick has room to spare. Amber means it runs out before it resets at the pace so far,
+/// or is nearly gone; red, almost nothing is left.
+struct LimitsPage: View {
+    let dash: Dashboard
+
+    var body: some View {
+        let shown = Array(dash.visibleLimits.prefix(2))
+        let rows = LimitRow.allCases.filter { row in shown.contains { row.window(of: $0) != nil } }
+        HStack(alignment: .top, spacing: 72) {
+            ForEach(shown) {
+                LimitsColumn(limits: $0, rows: rows, now: dash.now, use24h: dash.config.clock.use24h,
+                             size: shown.count == 1 ? 180 : rows.count == 1 ? 150 : 120)
+            }
+        }
+        .padding(.horizontal, 56)
+        .padding(.top, 34)
+        .padding(.bottom, 74)  // clear of the agent bars along the bottom edge
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+enum LimitRow: CaseIterable {
+    case session, week
+
+    func window(of limits: AgentLimits) -> UsageWindow? {
+        switch self {
+        case .session: limits.session
+        case .week: limits.week
+        }
+    }
+
+    var caption: String { L10n.t(self == .session ? "LEFT  5H" : "LEFT  WEEK") }
+    var missing: String { L10n.t(self == .session ? "NO 5-HOUR LIMIT" : "NO WEEKLY LIMIT") }
+}
+
+struct LimitsColumn: View {
+    let limits: AgentLimits
+    let rows: [LimitRow]
+    let now: Date
+    let use24h: Bool
+    let size: CGFloat
+
+    var body: some View {
+        let age = now.timeIntervalSince(limits.updated)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                TokenCaption(text: limits.kind.rawValue.uppercased() + (limits.plan.map { "  " + $0.uppercased() } ?? ""))
+                Spacer(minLength: 16)
+                if age > 1800 {  // an old report: the agent has not been used since
+                    TokenCaption(text: L10n.ago(Fmt.duration(age)))
+                }
+            }
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                if index > 0 {
+                    Rectangle().fill(Theme.faint).frame(height: 2)
+                }
+                // Every row the same height in every column, so the rows line up across the page.
+                Group {
+                    if let window = row.window(of: limits) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            LimitFigure(window: window, now: now, caption: row.caption, size: size)
+                                .padding(.top, -size / 9)
+                                .padding(.bottom, -4)
+                            LimitBar(window: window, now: now)
+                                .frame(height: 22)
+                            LimitNote(window: window, now: now, use24h: use24h)
+                                .padding(.top, 14)
+                        }
+                    } else {
+                        TokenCaption(text: row.missing)
+                            .foregroundStyle(Theme.faint)
+                            .padding(.top, size / 3)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: rows.count == 1 ? .leading : .topLeading)
+                .padding(.vertical, 10)
+            }
+        }
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+@MainActor
+enum LimitStyle {
+    /// Green with room to spare, amber when it runs out before the reset or is under 20% left, red under 10%.
+    static func color(_ w: UsageWindow, _ now: Date) -> Color {
+        if w.left < 10 { return Theme.down }
+        if w.left < 20 || w.runsOut(now) != nil { return Theme.waiting }
+        return Theme.up
+    }
+
+    /// "RESETS IN 1H 42M" within a day, otherwise with the weekday and time: "RUNS OUT FRI 14:00".
+    static func note(runsOut: Bool, _ date: Date, now: Date, use24h: Bool) -> String {
+        let wait = date.timeIntervalSince(now)
+        let span = wait < 86400 ? Fmt.duration(wait) : nil
+        let at = Fmt.weekday(date) + " " + Fmt.time(date, use24h: use24h) + (use24h ? "" : " " + Fmt.meridiem(date))
+        if L10n.chinese {
+            return runsOut ? (span.map { "預計 \($0)後用完" } ?? "預計\(at) 用完") : (span.map { "\($0)後重置" } ?? "\(at) 重置")
+        }
+        return (runsOut ? "RUNS OUT " : "RESETS ") + (span.map { "IN " + $0.uppercased() } ?? at.uppercased())
+    }
+}
+
+/// What is left as a large percentage, white while there is room and in the alert color when not.
+struct LimitFigure: View {
+    let window: UsageWindow
+    let now: Date
+    let caption: String
+    let size: CGFloat
+
+    var body: some View {
+        let color = LimitStyle.color(window, now)
+        // "100%" is three digits wide: rather than cut it short, the number shrinks a little, and the caption, small
+        // already, keeps its size.
+        HStack(alignment: .firstTextBaseline, spacing: 20) {
+            Text("\(Int(window.left.rounded()))%")
+                .font(Theme.font(size, .bold))
+                .monospacedDigit()
+                .foregroundStyle(color == Theme.up ? Theme.text : color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            TokenCaption(text: caption)
+                .fixedSize()
+                .layoutPriority(1)
+        }
+    }
+}
+
+/// What is left, as a bar in the alert colors, with a tick where an even pace would leave it.
+struct LimitBar: View {
+    let window: UsageWindow
+    let now: Date
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.14))
+                if window.left > 0 {
+                    Capsule()
+                        .fill(LimitStyle.color(window, now))
+                        .frame(width: max(geo.size.height, width * window.left / 100))
+                }
+                if let elapsed = window.elapsed(now) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Theme.text)
+                        .frame(width: 6, height: geo.size.height + 18)
+                        .offset(x: min(width - 6, max(0, width * (1 - elapsed) - 3)))
+                }
+            }
+        }
+    }
+}
+
+/// When it runs out at this pace, in the alert color, or else when it resets.
+struct LimitNote: View {
+    let window: UsageWindow
+    let now: Date
+    let use24h: Bool
+
+    var body: some View {
+        Group {
+            if let out = window.runsOut(now) {
+                Text(LimitStyle.note(runsOut: true, out, now: now, use24h: use24h))
+                    .foregroundStyle(LimitStyle.color(window, now))
+            } else if let resets = window.resetsAt {
+                Text(LimitStyle.note(runsOut: false, resets, now: now, use24h: use24h))
+                    .foregroundStyle(Theme.secondary)
+            }
+        }
+        .font(Theme.font(40, .semibold))
+        .minimumScaleFactor(0.7)
+    }
+}
+
 // MARK: tokens
 
 /// The tokens the coding agents used on this Mac: today's count large, with the agents' shares under it; the last 7 and
@@ -939,7 +1236,7 @@ struct TokensPage: View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
-                    TokenCaption(text: "TODAY")
+                    TokenCaption(text: L10n.t("TODAY"))
                     Text(Fmt.tokens(day.total))
                         .font(Theme.font(150, .bold))
                         .monospacedDigit()
@@ -950,10 +1247,10 @@ struct TokensPage: View {
                 }
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 0) {
-                    TokenStat(label: "7 DAYS", count: history.sum((today - 6)...today).total, size: 56)
-                    TokenStat(label: "30 DAYS", count: history.sum((today - 29)...today).total, size: 56)
-                    TokenStat(label: "ALL TIME", count: history.allTime, size: 56)
-                    TokenStat(label: "STREAK", value: streak == 1 ? "1 day" : "\(streak) days", size: 56)
+                    TokenStat(label: L10n.t("7 DAYS"), count: history.sum((today - 6)...today).total, size: 56)
+                    TokenStat(label: L10n.t("30 DAYS"), count: history.sum((today - 29)...today).total, size: 56)
+                    TokenStat(label: L10n.t("ALL TIME"), count: history.allTime, size: 56)
+                    TokenStat(label: L10n.t("STREAK"), value: L10n.days(streak), size: 56)
                 }
                 .fixedSize()
             }
@@ -1039,7 +1336,9 @@ struct TokenHeatmap: View {
     let weeks: Int
     let firstWeekday: Int  // Calendar's: 1 is Sunday
 
-    private static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    private static var months: [String] {
+        L10n.chinese ? (1...12).map { "\($0)月" } : ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    }
 
     var body: some View {
         Canvas { ctx, size in
@@ -1089,12 +1388,27 @@ struct TokenHeatmap: View {
 
 @MainActor
 enum Fmt {
-    private static let dateFormatter: DateFormatter = {
+    /// Formatters in English or Traditional Chinese, as the language setting says, made once each.
+    private static func formatter(_ english: String, _ chinese: String) -> DateFormatter {
+        let key = (L10n.chinese ? "zh:" : "en:") + english
+        if let f = formatters[key] { return f }
         let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "EEE d MMM"
+        f.locale = Locale(identifier: L10n.chinese ? "zh_Hant_TW" : "en_US_POSIX")
+        f.dateFormat = L10n.chinese ? chinese : english
+        formatters[key] = f
         return f
-    }()
+    }
+
+    nonisolated(unsafe) private static var formatters: [String: DateFormatter] = [:]
+
+    /// "Sat 10 Oct", or "10月10日 週六".
+    private static var dateFormatter: DateFormatter { formatter("EEE d MMM", "M月d日 EEE") }
+
+    /// "FRI", or "週五".
+    static func weekday(_ date: Date) -> String { formatter("EEE", "EEE").string(from: date) }
+
+    /// "Mar 2023", or "2023年3月", for when a picture was taken.
+    static func month(_ date: Date) -> String { formatter("MMM yyyy", "yyyy年M月").string(from: date) }
 
     /// The clock's zone: an IANA identifier from config, or this Mac's.
     static func zone(_ identifier: String) -> TimeZone {
@@ -1120,7 +1434,8 @@ enum Fmt {
     }
 
     static func meridiem(_ date: Date, zone: TimeZone = .current) -> String {
-        calendar(zone).component(.hour, from: date) < 12 ? "AM" : "PM"
+        let morning = calendar(zone).component(.hour, from: date) < 12
+        return L10n.chinese ? (morning ? "上午" : "下午") : (morning ? "AM" : "PM")
     }
 
     static func date(_ date: Date, zone: TimeZone = .current) -> String {
@@ -1193,13 +1508,15 @@ enum Fmt {
 
     static func duration(_ seconds: TimeInterval) -> String {
         let s = max(0, Int(seconds))
+        let zh = L10n.chinese
         switch s {
-        case ..<60: return "\(s)s"
-        case ..<3600: return "\(s / 60)m"
+        case ..<60: return zh ? "\(s)秒" : "\(s)s"
+        case ..<3600: return zh ? "\(s / 60)分" : "\(s / 60)m"
         case ..<86400:
             let (h, m) = (s / 3600, s % 3600 / 60)
+            if zh { return m == 0 ? "\(h)小時" : "\(h)小時\(m)分" }
             return m == 0 ? "\(h)h" : "\(h)h \(m)m"
-        default: return "\(s / 86400)d"
+        default: return zh ? "\(s / 86400)天" : "\(s / 86400)d"
         }
     }
 }

@@ -2,7 +2,17 @@ import Foundation
 
 /// One Claude Code or Codex session as the display shows it.
 struct AgentSession: Identifiable, Equatable, Comparable, Sendable {
-    enum Kind: String, Sendable { case claude, codex, other }
+    enum Kind: String, Sendable {
+        case claude, codex, other
+
+        var title: String {
+            switch self {
+            case .claude: "Claude Code"
+            case .codex: "Codex"
+            case .other: "An agent"
+            }
+        }
+    }
 
     enum State: Int, Comparable, Sendable {
         case waiting, working, done, idle  // display order: what needs you first
@@ -11,10 +21,10 @@ struct AgentSession: Identifiable, Equatable, Comparable, Sendable {
 
         var label: String {
             switch self {
-            case .waiting: "NEEDS YOU"
-            case .working: "WORKING"
-            case .done: "DONE"
-            case .idle: "IDLE"
+            case .waiting: L10n.t("NEEDS YOU")
+            case .working: L10n.t("WORKING")
+            case .done: L10n.t("DONE")
+            case .idle: L10n.t("IDLE")
             }
         }
     }

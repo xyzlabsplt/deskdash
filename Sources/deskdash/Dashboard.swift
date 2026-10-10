@@ -1,20 +1,25 @@
+import AppKit
 import SwiftUI
 
 enum Page: Hashable, Sendable {
     case clock
     case music
+    case photos
     case climate
     case markets(Int)
     case agents
+    case limits
     case tokens
 
     var name: String {
         switch self {
         case .clock: "clock"
         case .music: "music"
+        case .photos: "photos"
         case .climate: "climate"
         case .markets: "markets"
         case .agents: "agents"
+        case .limits: "limits"
         case .tokens: "tokens"
         }
     }
@@ -28,9 +33,11 @@ enum Page: Hashable, Sendable {
         switch self {
         case .clock: "Clock"
         case .music: "Now Playing"
+        case .photos: "Photos"
         case .climate: "Climate"
         case .markets(let i): i == 0 ? "Markets" : "Markets \(i + 1)"
         case .agents: "Agents"
+        case .limits: "Limits"
         case .tokens: "Tokens"
         }
     }
@@ -51,6 +58,18 @@ final class Dashboard {
     /// What Music or Spotify is playing on this Mac; nil while nothing plays.
     private(set) var track: NowPlaying?
     var sessions: [AgentSession] = []
+    /// Claude Code's and Codex's plan limits, as each last reported them.
+    var limits: [AgentLimits] = []
+    /// The picture the photos page shows next; nil without a photos folder.
+    var photo: Photo?
+    /// The Mac's sound is muted or all the way down while sounds are on: shown, since no chime would be heard.
+    var soundSilent = false
+    /// The dock screen is black: nobody has used the Mac for `schedule.idleMinutes`, or it is sleep hours
+    /// (`schedule.sleep`). Only the running dashboard decides it (`managesScreen`); snapshots never go black.
+    private(set) var screenOff = false
+    @ObservationIgnored var managesScreen = false
+    /// The dock screen is the main display, where someone at the Mac works; set by AppDelegate's stacking.
+    @ObservationIgnored var dockIsMain = false
     /// Claude Code's and Codex's tokens by day; nil while the tokens page is off.
     var tokens: TokenHistory?
     /// The token heatmap's top row, as Calendar's weekday (1 is Sunday); nil follows this Mac's calendar.
@@ -69,6 +88,15 @@ final class Dashboard {
     @ObservationIgnored private var telegramQueue: [TelegramPost] = []
     @ObservationIgnored private var telegramUntil: Date?
     @ObservationIgnored private var announcedTrack: String?
+    let chime = Chime()
+    /// The alert card (`alerts.card`): drawn on the dashboard while it covers the dock screen, and otherwise floating
+    /// over the windows on the dock screen (`callout`), until what it is for is over or someone clicks it away.
+    private(set) var card: AlertCard?
+    /// Whether the dashboard covers the dock screen, above everything there; set by AppDelegate's stacking.
+    private(set) var covering = false
+    @ObservationIgnored let callout = Callout()
+    /// What the card is up for, so it leaves once that is over: nil for one that stays until dismissed.
+    @ObservationIgnored private var cardFor: (kind: Chime.Kind, session: String?)?
 
     init(config: Config) {
         self.config = config
@@ -82,9 +110,11 @@ final class Dashboard {
             switch name {
             case "clock": out.append(.clock)
             case "music" where track != nil: out.append(.music)
+            case "photos" where photo != nil: out.append(.photos)
             case "climate" where hasIndoor: out.append(.climate)
             case "markets": out += (0..<marketPageCount).map { Page.markets($0) }
             case "agents" where hasActiveAgents: out.append(.agents)
+            case "limits" where hasLimits: out.append(.limits)
             case "tokens" where hasTokens: out.append(.tokens)
             default: break
             }
@@ -110,6 +140,20 @@ final class Dashboard {
     func tick() {
         now = Date()
         if let until = doneFlashUntil, now >= until { doneFlashUntil = nil }
+        if managesScreen {
+            // Sleep hours keep it dark, unless it is the main display and someone is using the Mac: then it is their
+            // screen, and going dark would leave them with nothing to see.
+            let sleeping = sleepingNow && !(dockIsMain && Chime.idleSeconds < 60)
+            let off = sleeping || idleNow && !alertUp
+            if off != screenOff { screenOff = off }
+        }
+        if card != nil, !config.alerts.card || cardFor.map(stillOn) == false { dismissCard() }
+        chime.tick(config.alerts, quiet: quietNow) { kind in
+            switch kind {
+            case .waiting: anyWaiting
+            case .done, .limit: true  // until someone is back: a finished turn waits for you as well
+            }
+        }
         if let until = telegramUntil, now >= until { showNextTelegram() }
         if let until = trackFlashUntil, now >= until { withAnimation(.easeInOut(duration: 0.3)) { trackFlashUntil = nil } }
         let list = pages
@@ -153,18 +197,121 @@ final class Dashboard {
     var stillFrame = false
     var blinkOn: Bool { stillFrame || Int(now.timeIntervalSince1970) % 2 == 0 }
 
-    enum AgentAlert { case waiting, done }
+    enum AgentAlert { case waiting, done, limit }
 
     func alert(_ kind: AgentAlert) {
         let cfg = config.agents
         switch kind {
         case .waiting:
             if cfg.jumpOnWaiting { show(.agents, hold: cfg.holdSeconds) }
+            let s = visibleSessions.filter { $0.state == .waiting }.max { $0.since < $1.since }
+            raise(.waiting, title: L10n.needsYou(s?.kind.title ?? "An agent"),
+                  body: s.map { [$0.name, L10n.t($0.detail ?? ""), $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "",
+                  session: s?.id)
         case .done:
             doneFlashUntil = Date().addingTimeInterval(6)
             if cfg.jumpOnDone && page != .agents { show(.agents, hold: min(10, cfg.holdSeconds)) }
+            let s = visibleSessions.filter { $0.state == .done }.max { $0.since < $1.since }
+            raise(.done, title: L10n.finished(s?.kind.title ?? "An agent"),
+                  body: s.map { [$0.name, $0.project].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "", session: s?.id)
+        case .limit:
+            if config.limits.jumpOnAlert && hasLimits { show(.limits, hold: cfg.holdSeconds) }
+            let (title, body) = lowestLimit
+            raise(.limit, title: title, body: body, session: nil)
         }
     }
+
+    /// The sound, and the card unless one that outranks it is up.
+    private func raise(_ kind: Chime.Kind, title: String, body: String, session: String?) {
+        chime.ring(kind, config.alerts, quiet: quietNow, title: title, body: body)
+        guard config.alerts.card else { return }
+        if let current = card, current.kind > kind, cardFor.map(stillOn) ?? true { return }
+        showCard(AlertCard(kind: kind, title: title, body: body), for: (kind, session))
+    }
+
+    struct AlertCard: Equatable {
+        let kind: Chime.Kind
+        let title: String
+        let body: String
+    }
+
+    func showCard(_ next: AlertCard, for what: (kind: Chime.Kind, session: String?)?) {
+        withAnimation(.easeInOut(duration: 0.3)) { card = next }
+        cardFor = what
+        placeCard()
+    }
+
+    /// A click on the dashboard, or the floating card's ×.
+    func dismissCard() {
+        withAnimation(.easeInOut(duration: 0.3)) { card = nil }
+        cardFor = nil
+        placeCard()
+    }
+
+    func setCovering(_ value: Bool) {
+        guard value != covering else { return }
+        covering = value
+        placeCard()
+    }
+
+    /// On the dashboard while it covers the dock screen; floating at the dock screen's top right while windows are
+    /// there and the dashboard stays behind them.
+    private func placeCard() {
+        let match = config.display.match.lowercased()
+        if let card, !covering, !match.isEmpty,
+           let screen = NSScreen.screens.first(where: { $0.localizedName.lowercased().contains(match) }) {
+            callout.onClose = { [weak self] in self?.dismissCard() }
+            callout.show(card.kind, title: card.title, body: card.body, on: screen)
+        } else if callout.shown {
+            callout.hide()
+        }
+    }
+
+    /// Whether what a card is up for still holds: the session still waits; the finished one has not been picked up
+    /// again (it stays DONE or goes IDLE); a limit is still low.
+    private func stillOn(_ c: (kind: Chime.Kind, session: String?)) -> Bool {
+        let session = c.session.flatMap { id in visibleSessions.first { $0.id == id } }
+        switch c.kind {
+        case .waiting: return c.session == nil ? anyWaiting : session?.state == .waiting
+        case .done: return c.session == nil || session.map { $0.state == .done || $0.state == .idle } == true
+        case .limit:
+            let below = config.limits.alertBelow
+            return visibleLimits.contains { [$0.session, $0.week].contains { $0.map { $0.left < below } == true } }
+        }
+    }
+
+    /// `deskdash ctl chime KIND`: the sound once, and the card until it is closed, whatever the settings.
+    func preview(_ kind: Chime.Kind) {
+        let title = switch kind {
+        case .waiting: L10n.needsYou("Claude Code")
+        case .done: L10n.finished("Codex")
+        case .limit: L10n.limitLow("Claude Code", week: false, left: 15)
+        }
+        let body = L10n.t("A preview of deskdash's alert")
+        chime.preview(kind, config.alerts, title: title, body: body)
+        showCard(AlertCard(kind: kind, title: title, body: body), for: nil)
+    }
+
+    /// The window with the least left, for the limit alert: "Claude 5-hour limit: 15% left".
+    private var lowestLimit: (String, String) {
+        var lowest: (AgentLimits, Bool, UsageWindow)?
+        for l in visibleLimits {
+            for (week, w) in [(false, l.session), (true, l.week)] {
+                guard let w else { continue }
+                if lowest == nil || w.left < lowest!.2.left { lowest = (l, week, w) }
+            }
+        }
+        guard let (l, week, w) = lowest else { return (L10n.t("A plan limit is running low"), "") }
+        let resets = w.resetsAt.map { L10n.resetsIn(Fmt.duration($0.timeIntervalSince(now))) } ?? ""
+        return (L10n.limitLow(l.kind.title, week: week, left: Int(w.left.rounded())), resets)
+    }
+
+    // MARK: limits
+
+    var hasLimits: Bool { !limits.isEmpty }
+
+    /// As of now: a window past its reset time shows as started over.
+    var visibleLimits: [AgentLimits] { limits.map { $0.at(now) } }
 
     // MARK: tokens
 
@@ -226,6 +373,23 @@ final class Dashboard {
         let night = DailyWindow(config.schedule.dim)?.contains(now) ?? false
         let level = brightnessPreview ?? (night ? config.schedule.dimBrightness : config.schedule.dayBrightness)
         return min(1, max(0.05, level))
+    }
+
+    /// Sleep hours: the dock screen stays black, alerts or not.
+    var sleepingNow: Bool { DailyWindow(config.schedule.sleep)?.contains(now) ?? false }
+
+    /// Nobody has touched the keyboard or mouse for `schedule.idleMinutes`.
+    private var idleNow: Bool {
+        config.schedule.idleMinutes > 0 && Chime.idleSeconds >= config.schedule.idleMinutes * 60
+    }
+
+    /// Something the dashboard is showing for you, which lights a screen gone black for idleness: a session waiting,
+    /// one just finished, an alert card, a chime still ringing.
+    private var alertUp: Bool { anyWaiting || doneFlash || card != nil || chime.ringing != nil }
+
+    /// No sounds in the night window, when `alerts.quietAtNight` is on.
+    var quietNow: Bool {
+        config.alerts.quietAtNight && (DailyWindow(config.schedule.dim)?.contains(now) ?? false)
     }
 
     var keepAwakeNow: Bool {

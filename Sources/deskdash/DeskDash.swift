@@ -1,4 +1,5 @@
 import AppKit
+import VirtualDisplay
 
 /// deskdash: a glanceable, always-on dashboard for the Wokyis dock's 5" 1280x720 screen.
 /// One borderless window covers that screen; nothing listens on a port.
@@ -20,6 +21,21 @@ enum DeskDash {
             Control.send(words)
         case .windows:
             MainActor.assumeIsolated { WindowScan.report() }
+        case .displays:
+            MainActor.assumeIsolated {
+                _ = NSApplication.shared
+                DisplayManager.report()
+                guard options.tryVirtual else { return }
+                print("\nAdding a 1920x1080 virtual display for 3 s, without changing the main display:")
+                var display = DDVirtualDisplay(name: "deskdash test", width: 1920, height: 1080, hiDPI: false)
+                guard display != nil else { return print("could not add one: this macOS may have changed its private API") }
+                RunLoop.main.run(until: Date().addingTimeInterval(3))
+                DisplayManager.report()
+                display = nil
+                RunLoop.main.run(until: Date().addingTimeInterval(2))
+                print("\nRemoved it:")
+                DisplayManager.report()
+            }
         case .music:
             let listener = MainActor.assumeIsolated {
                 setvbuf(stdout, nil, _IOLBF, 0)  // a line at a time, even into a pipe
@@ -57,6 +73,18 @@ enum DeskDash {
             }
             RunLoop.main.add(Timer(timeInterval: 86_400, repeats: true) { _ in }, forMode: .default)
             RunLoop.main.run()
+        case .limits:
+            MainActor.assumeIsolated {
+                let loaded = ConfigStore(path: options.configPath).load()
+                if let error = loaded.error { fputs("\(error)\n", stderr) }
+                let cfg = (loaded.config ?? Config()).limits
+                _ = Task {
+                    print(await LimitsService.report(cfg))
+                    exit(0)
+                }
+            }
+            RunLoop.main.add(Timer(timeInterval: 86_400, repeats: true) { _ in }, forMode: .default)
+            RunLoop.main.run()
         case .dyson(let words):
             MainActor.assumeIsolated {
                 _ = Task { exit(await DysonSetup.main(words)) }
@@ -79,7 +107,7 @@ enum DeskDash {
 }
 
 struct Options: Sendable {
-    enum Command: Equatable, Sendable { case run, snapshot, ctl([String]), windows, music, tokens, dyson([String]), config, help }
+    enum Command: Equatable, Sendable { case run, snapshot, ctl([String]), windows, displays, music, tokens, limits, dyson([String]), config, help }
 
     var command = Command.run
     var configPath: String?
@@ -88,6 +116,7 @@ struct Options: Sendable {
     var noAgents = false
     var save = false
     var watch = false
+    var tryVirtual = false
     var outDir = "snapshots"
     var only: [String] = []
 
@@ -98,25 +127,32 @@ struct Options: Sendable {
           Run the dashboard full screen on the display named in config (the login service runs this).
           --windowed shows it in a normal window on the largest screen instead; --demo adds sample agents.
       deskdash snapshot [--config FILE] [--out DIR] [--demo] [--no-agents] [PAGE...]
-          Render pages (clock, music, climate, markets, agents, tokens) to PNG files at 1280x720 and exit. --demo draws
+          Render pages (clock, music, photos, climate, markets, agents, limits, tokens, alert) to PNG files at 1280x720 and exit. --demo draws
           sample sessions, purifier, weather, load, track and tokens instead of this Mac's own; --no-agents draws no
           sessions at all.
           The PAGE `settings` renders each Settings tab (settings-TAB.png, and settings-TAB-end.png for a tall tab
           scrolled down).
       deskdash ctl next | prev | pause | resume | reload | demo | page NAME | capture FILE
                  | hide [MINUTES] | show | quit | telegram [CHANNEL] | settings [TAB] | settings-close
-                 | capture-settings FILE
-          Control the running dashboard. quit also stops the LaunchAgent that runs it, until the next login.
+                 | capture-settings FILE | chime waiting | done | limit | albums
+          Control the running dashboard. quit also stops the LaunchAgent that runs it, until the next login. chime
+          plays that alert's sound once, even with sounds off, to hear it. albums logs the Photos app's album names.
       deskdash config [--config FILE] [--save]
           Print the settings that differ from the defaults. --save rewrites the file the way Settings does.
       deskdash windows
           List each display and the other apps' windows on it: what makes the dashboard stay behind them.
+      deskdash displays [--try-virtual]
+          List the displays, which is main, and where each sits. --try-virtual adds a virtual display for 3 s, without
+          changing the main display, to check that this macOS supports display.virtualMain.
       deskdash music [--config FILE]
           Print what Music and Spotify on this Mac announce, as they announce it, and each cover found.
       deskdash tokens [--config FILE] [--watch]
           Print the tokens Claude Code and Codex used on this Mac, each day, as the tokens page counts them. --watch
           prints today's count instead, each time it changes (checked every 10 s, as the page does while it shows);
           Control-C stops.
+      deskdash limits [--config FILE]
+          Print the 5-hour and weekly limits of Claude Code's and Codex's plans as the limits page reads them: how
+          much is left, when each resets, and when it runs out at the pace so far.
       deskdash dyson setup | test [--host HOST]
           Connect the Dyson purifier in Terminal, as Settings → Purifier does (run it yourself: it asks for a
           password), or read its sensors once.
@@ -137,11 +173,18 @@ struct Options: Sendable {
         case "windows":
             o.command = .windows
             return o
+        case "displays":
+            o.command = .displays
+            o.tryVirtual = args.dropFirst().contains("--try-virtual")
+            return o
         case "music":
             o.command = .music
             rest = rest.dropFirst()
         case "tokens":
             o.command = .tokens
+            rest = rest.dropFirst()
+        case "limits":
+            o.command = .limits
             rest = rest.dropFirst()
         case "dyson":
             o.command = .dyson(Array(rest.dropFirst()))

@@ -4,27 +4,29 @@ A glanceable dashboard for the 5" 1280×720 screen on the Wokyis M5, the dock th
 
 One native Swift binary, no dependencies, about 1 KB/s of network, nothing listening on a port. It covers only the screen whose name contains `Wokyis` (Settings can pick another), and hides if that screen goes away. Everything personal, like your city, tickers, channels and purifier, is set in its Settings window and stays on your Mac.
 
-| Clock | Now Playing | Climate | Markets | Agents | Tokens |
-|---|---|---|---|---|---|
-| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![tokens](docs/tokens.png) |
+| Clock | Now Playing | Photos | Climate | Markets | Agents | Limits | Tokens |
+|---|---|---|---|---|---|---|---|
+| ![clock](docs/clock.png) | ![now playing](docs/music.png) | ![photos](docs/photos.png) | ![climate](docs/climate.png) | ![markets](docs/markets.png) | ![agents](docs/agents.png) | ![limits](docs/limits.png) | ![tokens](docs/tokens.png) |
 
 ## Pages
 
 The pages rotate every 12 s (the clock gets 15 s). Click the dashboard for the next page. Clicks do not take focus from the app you are working in.
 
-**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has six tabs:
+**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has eight tabs:
 
-- **General**: which screen, which pages rotate and for how long, what the clock page shows (12/24-hour, system stats, the playing track), the Now Playing takeover and covers, the keep-awake schedule, and the brightness by day and at night.
+- **General**: the language, which screen, keeping the dock screen from being the main display (see [When the dock screen is the main display](#when-the-dock-screen-is-the-main-display)), which pages rotate and for how long, what the clock page shows (12/24-hour, system stats, the playing track), the Now Playing takeover and covers, the keep-awake schedule, and the brightness by day and at night.
 - **Weather & Time**: search for your city (Open-Meteo, no key). Until you choose one there is no weather. Optionally the clock follows that place's time zone, and the clock page then names the city.
+- **Photos**: an album from the Photos app, picked from a list, or a folder, and how the pictures show.
 - **Markets**: add, reorder, or remove Hyperliquid symbols, each checked against Hyperliquid's list.
 - **Telegram**: add or remove public channels, each checked through its public preview, and preview a channel's newest post on the dock screen.
-- **Agents**: the alert behavior, the weeks in the token heatmap, and the command that installs the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
+- **Agents**: where each agent's sessions and limits come from, with whether each works and when it last reported, and a button that installs the Codex hook; how long finished and idle sessions show; the weeks in the token heatmap.
+- **Alerts**: the sounds (each with a play button) and how they repeat, the card, the jumps to the agents page, and the low-limit alert. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
 
 Changes apply at once and are saved to `config.json`, writing only what differs from the defaults. `deskdash config` prints that.
 
 **It never hides your windows.** The dashboard covers the dock screen only while nothing else is on it. When any app's window lands there, the dashboard drops behind all windows within a second, like a desktop picture, and it covers the screen again once that screen is clear. The same happens whenever the dock screen is the main display (the one with the menu bar), because that is where macOS opens new windows and dialogs.
 
-- **Clock**: time, date, and the indoor temperature and humidity from a Dyson purifier (see [Climate](#climate-the-dyson-purifier)). Without one, outdoor readings for your city from [Open-Meteo](https://open-meteo.com) (no key, refreshed every 15 min). Along the bottom, this Mac's own load, in small versions of the Climate page's 10-segment bars:
+- **Clock**: time, date (and the city, when the clock follows a place whose time differs from this Mac's), and the indoor temperature and humidity from a Dyson purifier (see [Climate](#climate-the-dyson-purifier)). Without one, outdoor readings for your city from [Open-Meteo](https://open-meteo.com) (no key, refreshed every 15 min). Along the bottom, this Mac's own load, in small versions of the Climate page's 10-segment bars:
   - **CPU**: amber from 70%, red from 90%.
   - **Temp**: the CPU cores' average temperature, a segment per 10 °C (see [System stats](#system-stats)). Colored by macOS's thermal pressure (green nominal, amber fair, red serious or critical) rather than by degrees, because Apple silicon runs its cores past 90 °C under load by design. It's in °F when the weather is. Macs without the sensors, such as Intel ones, leave it out.
   - **RAM**: colored by macOS's memory pressure (green normal, amber warning, red critical) rather than by how full it is, because macOS keeps memory full on purpose.
@@ -33,6 +35,7 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
 
   While Music or Spotify plays, a line above them shows the cover, the title and artist, and a thin progress bar. With neither row showing, the time grows back to 360 pt.
 - **Now Playing**: the cover, large, beside the title, artist, album, and a progress bar. This page only rotates in while something plays (see [Now playing](#now-playing-music-and-spotify)).
+- **Photos**: the pictures of an album in the Photos app (`"photos": { "album": "Favorites" }`, by the name Photos shows: one of yours, a shared album, or a smart album such as Favorites), or of a folder you choose (`"photos": { "folder": "~/Pictures/deskdash" }`, its subfolders included: JPEG, HEIC, PNG, TIFF, GIF and WebP). For an album macOS asks once whether deskdash may read the Photos library (System Settings → Privacy & Security → Photos), and pictures kept only in iCloud are downloaded at the size the page needs. `deskdash ctl albums` writes the album names to the log. A different one each time the page comes round, shuffled, never the same twice in a row. Each is shown whole over a blurred copy of itself (`photos.fill` crops it to fill the screen instead), with the time and date in the corner (`photos.clock`) and the month it was taken, when the picture says. The next picture is decoded while the page is away, at most 2048 px, so showing it costs nothing, and the folder is listed again every 5 minutes, so new pictures join the rotation on their own. Nothing is copied or cached. To give it more time, set `"pages": { "durations": { "photos": 20 } }`.
 - **Climate**: the purifier's readings, laid out like Dyson's own display. Inside temperature and humidity sit beside their icons. Each pollutant (CO₂, PM2.5, PM10, VOC, NO₂, and formaldehyde on models that measure it) gets a 10-segment level bar: segments 1–3 are the good band (green), 4–6 fair (amber), and 7–10 poor (red), so height and color agree from across the room. The outdoor weather sits in the corner. This page only appears while the purifier is reporting.
 - **Markets**: Hyperliquid perps, three per page by default and up to five, sized to fill the screen: price, 24 h change, and a 24 h sparkline. With one or two on a page, the symbol and change sit above a larger price. Prices stream over Hyperliquid's WebSocket, about one 300-byte message per coin per second, and the screen redraws once a second. Prices dim if the feed goes quiet for a minute.
 - **Agents**: every live Claude Code and Codex session, with what needs you first:
@@ -45,9 +48,20 @@ Changes apply at once and are saved to `config.json`, writing only what differs 
   | gray | **IDLE** | open but quiet; hidden after 12 h |
 
   This page only rotates in while some session is not idle. A thin bar per active session runs along the bottom of every other page, in the same colors.
+- **Limits**: how much is left of your Claude and Codex plans' usage limits, a column per agent and a row per window, the 5-hour one and the week, all at one size so the same window sits side by side. A window a plan does not have (Codex Pro has only the week) keeps its place, marked; a row no agent has is left out. Each bar has a white tick where an even pace would leave it, so a bar that reaches past its tick has room to spare. The figures stay white while there is room. They turn amber when the window would run out before it resets at the pace so far ("RUNS OUT THU 18:00") or has under 20% left, and red under 10%. Otherwise the line under the bar says when it resets. A report older than 30 minutes says how old. This page appears once either agent has reported its limits (see [How plan limits work](#how-plan-limits-work)).
 - **Tokens**: the tokens your coding agents used on this Mac: Claude Code, Codex, Gemini CLI and Muse Code. Today's count is large, with each agent's share under it, and the last 7 and 30 days, all time, and your streak of days with any use sit beside it. Underneath are the last 26 weeks as a GitHub-style heatmap: a column per week, a row per weekday from your calendar's first day of the week, and GitHub's shades of green, from none to the busiest quarter of your days. Today is outlined. While this page shows, the count catches up every 10 s. It appears once there is any use in those weeks (see [How token counting works](#how-token-counting-works)).
 
-**Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents.
+**Alerts.** When a session starts waiting on you, the display jumps to the agents page for 20 s, and an amber frame blinks around every page until nothing is waiting. When a session finishes, a green frame blinks for 6 s and the agents page shows for 10 s. Both jumps can be turned off in Settings → Agents. When a plan's 5-hour or weekly window drops under 20% left, the limits page shows for 20 s, once per window until it resets.
+
+**Sounds and the alert card.** Off until you turn them on in `config.json` (`"alerts": { "sound": true, "card": true }`). Then each of those alerts also plays a sound (Glass when a session needs you, Hero when one finishes, Funk when a limit runs low; any of macOS's alert sounds by name), and a card on the dock screen says which session and what it waits for, in type you can read from the chair. It stays until what it is for is over (the session stops waiting, or you pick the finished one up again) or you click the dashboard. While windows are on the dock screen and the dashboard stays behind them, the card floats at the dock screen's top right instead, over those windows, without taking focus; its × closes it.
+
+- The sound repeats until you are back: until anyone uses the Mac's keyboard or mouse, or what it rang for is over. It comes again after 30 s, then each wait is half as long again, up to every 3 minutes (`alerts.repeatSeconds`, `alerts.repeatMaxSeconds`), so a missed one is not the last without it turning into nagging.
+- It rings through Notification Center (`alerts.notify`), as a notification saying what it is for, so macOS keeps it quiet the way it does any app's: in a Focus, Sleep included, and while the Mac is muted. deskdash.app is ad-hoc signed, and macOS keeps Notification Center from apps without a developer signature, so the notification goes through `osascript`'s `display notification` and shows under Script Editor. That is a Standard Addition and needs no Automation permission. Its banner leaves after a few seconds by default; the card is what stays. With `"notify": false` deskdash plays the sound itself at `alerts.volume`, Focus or not.
+- No sound in the night window (`schedule.dim`, 23:00 to 08:00) while `alerts.quietAtNight` is on.
+- While sounds are on and the Mac is muted or turned all the way down, a muted-speaker icon shows in the dock screen's top right corner, since no chime would be heard.
+- `deskdash ctl chime waiting` (or `done`, `limit`) plays one and shows its card, whatever the settings, to try them. `deskdash snapshot alert` renders the card.
+
+**Language.** The pages, menus, alerts and Settings follow macOS's language: English, or Traditional Chinese on a Mac set to it, dates, weekdays and durations included ("10月10日 週六", "1小時41分後重置"). Settings → General → Language, or `"language": "en"` or `"zh-Hant"` in `config.json`, picks one.
 
 **Night.** From 23:00 to 08:00 the dashboard draws at 35% brightness, and at 100% the rest of the day. Settings → General sets both levels. While you drag either slider, the dock screen shows that level, whatever the time, and returns to the schedule's shortly after. The dimming is drawn, as black over the page, because macOS has no public control for this panel's backlight. From 08:00 to 23:00 it keeps the displays from idle-sleeping. macOS can only keep all displays awake, not one, so turn **Keep the displays awake** off in Settings → General if the big monitor should sleep on its own schedule.
 
@@ -97,6 +111,8 @@ The clock page reads this Mac's load from the kernel every 2 s, and the numbers 
 
 All of that costs well under a millisecond. The SSD's free space goes through macOS's purgeable-space service and takes 6 to 40 ms, so it's read once a minute, off the main thread. `"stats": { "enabled": false }` removes the row and stops the sampling.
 
+**Idle and sleep hours.** Off until you set them in Settings → General → Schedule (`schedule.idleMinutes`, `schedule.sleep`). After that many minutes without keyboard or mouse input, the dock screen goes black, and any input brings it back, as does an alert: a session waiting on you, one finishing, a card, a chime still ringing. In sleep hours (say 23:00 to 08:00) it stays black whatever happens, and deskdash lets go of the keep-awake hold so macOS may sleep the displays; only when the dock screen is the main display and someone is using the Mac does it stay on, since it is then their screen. While black the dashboard draws nothing, and it also turns the panel itself off over DDC/CI (`display.powerOff`, on by default), so the backlight goes out rather than lighting a black picture: the panel's power mode (VCP 0xD6) set to off, and back to on with input or an alert, or when deskdash quits or starts. The Wokyis panel takes it, as most monitors do. On Apple silicon DDC goes through IOKit's private IOAVService, as MonitorControl and BetterDisplay use it; a panel that does not answer is only drawn black.
+
 **Temperature.** macOS has no public API for it, so it comes from the SMC, the controller that runs the Mac's fans and power. Any app can read the SMC through IOKit's public calls, without root or a permission prompt, and temperature monitors read it the same way. deskdash only reads it, never writes. Its sensors have undocumented four-letter names. deskdash averages the ones on the CPU cores, `Tp…` on the performance cores and `Te…` on the efficiency cores, 30 of them on an M6 Mac mini. Finding them takes 5 to 16 ms, once. A read then waits 3 to 6 ms on the SMC, under a millisecond of it CPU time, so it runs every 5 s, off the main thread.
 
 The color comes from macOS's thermal pressure, not the degrees. On that M6 under load, the hottest core reached 96 °C and the average 72 °C, while the pressure stayed nominal and the fan turned at 2,300 of its 4,900 rpm.
@@ -113,6 +129,22 @@ The color comes from macOS's thermal pressure, not the degrees. On that M6 under
   Then start `codex` and run `/hooks` to review and trust it. Codex will not run a new hook until you do. `--remove` takes it out again.
 
 Sessions whose process is gone are dropped, even without a `SessionEnd`.
+
+## How plan limits work
+
+The limits page reads what each agent itself reports about your plan. deskdash never touches a login or a token.
+
+- **Codex**: no setup. After every reply Codex logs a `token_count` event with the plan's `rate_limits`: each window's percent used, its length, and when it resets. deskdash reads the newest log's last 512 KB under `~/.codex/sessions/`, only those events, every 5 s and only when the file has changed. A window is the 5-hour one or the week by its length, not by its position, since Pro plans currently have only the week.
+- **Claude Code**: on Pro and Max plans Claude Code hands its status line command the plan's `rate_limits` (`five_hour` and `seven_day`, each with `used_percentage` and `resets_at`) from a session's first reply on. `hooks/claude-statusline.sh` copies just that object to `~/.local/state/deskdash/limits/claude.json` and prints a short `5h 24% · 7d 82%` for the status bar. A status line you already had keeps working: the installer saves its command and runs it after. To install it, from the checkout:
+
+  ```bash
+  scripts/install-claude-statusline.sh
+  ```
+
+  `--remove` puts back what was there. The status line runs in Claude Code in a terminal; Claude's desktop app runs none.
+- **Claude Code in the desktop app**: the app shows the plan's limits on its usage card, and a Claude session in the app can read them with the app's `get_usage` tool. `hooks/claude-usage.sh` takes that tool's JSON on stdin and writes the same file the status line does, with the plan's name. Nothing runs it on a timer, since each run would be a Claude session spending the plan it measures: put a line in your `~/.claude/CLAUDE.md` asking Claude to call `get_usage` and pipe it into the script before ending a turn when the file is more than 15 minutes old, and the page stays current while you work, which is when the numbers move. Settings → Agents shows when each agent's limits were last reported.
+
+A window past its reset time shows as started over until the agent reports again. The numbers are only as fresh as the agent's last reply: usage elsewhere (claude.ai, the ChatGPT apps) shows up after the next one. `deskdash limits` prints what the page would show, with when each window resets and when it would run out at the pace so far. In `config.json`, `limits.claude` and `limits.codex` point elsewhere (`""` leaves one out), `limits.alertBelow` moves the 20% alert, and `limits.jumpOnAlert` turns its jump off.
 
 ## How token counting works
 
@@ -158,14 +190,23 @@ Other ways to run it:
 .build/release/deskdash snapshot --demo        # render each page to snapshots/*.png with sample data and exit
 .build/release/deskdash snapshot settings      # render each Settings tab to snapshots/settings-*.png
 .build/release/deskdash ctl next               # also: prev, pause, resume, reload, demo, page agents, capture FILE,
-                                               #       hide [MINUTES], show, quit
+                                               #       hide [MINUTES], show, quit, chime waiting|done|limit
 .build/release/deskdash windows                # each display and whose windows are on it
 .build/release/deskdash music                  # what Music and Spotify announce, as they do; Control-C stops
 .build/release/deskdash tokens                 # the tokens Claude Code and Codex used, each day; --watch follows today's
+.build/release/deskdash limits                 # what is left of Claude's and Codex's plan limits, and when each resets
 swift scripts/fake-track.swift spotify         # pretend Spotify started a track (also music; paused, stopped)
 ```
 
 `ctl demo` toggles three sample sessions, one of them waiting, to preview the alerts on the real screen. `ctl capture out.png` saves what the live window is showing, without a screen-recording permission.
+
+**Keeping macOS's permissions across rebuilds.** `scripts/build.sh` signs deskdash.app ad hoc, and macOS files privacy permissions (Local Network aside, which follows the bundle ID) under that exact build, so after every rebuild it asks again, for example to read `config.json` when the checkout is on an external drive, and the service waits on the prompt. Run this once to sign with a stable, self-signed identity of your own instead; macOS then asks one last time and keeps the answers:
+
+```bash
+scripts/make-signing-identity.sh   # --remove deletes it
+```
+
+It adds "deskdash local signing" to your login keychain, trusted for nothing, for codesign only. The first build with it asks for your login password, to let codesign use the key; choose Always Allow.
 
 ## Configure
 
@@ -180,6 +221,15 @@ deskdash has no account of its own and no server. It only talks to:
 - **Telegram**: the names of the public channels you watch, every 20 s.
 - **Spotify or Apple**: the playing track, once per album, while covers are on.
 - **Dyson**: your account email, the emailed code, and your password, once, and only if you connect the purifier through your account. After that, deskdash talks to the purifier on your own network only.
+
+## When the dock screen is the main display
+
+macOS opens windows and dialogs on the main display, so while the dock screen is main the dashboard stays behind them. Two settings in `config.json` keep it from being main:
+
+- `"display": { "keepOffMain": true }`: when a monitor is connected and the dock screen is main, deskdash makes the monitor main, as dragging the menu bar in System Settings → Displays does, and the arrangement is kept for that set of displays.
+- `"display": { "virtualMain": true }`: for a Mac you sometimes use remotely, through Parsec or Screen Sharing, with no monitor plugged in. Once the dock screen has been the only display for 10 s, deskdash adds a virtual display (1920×1080 points by default; `virtualWidth`, `virtualHeight`, `virtualHiDPI`) and makes it main. The remote session gets a full-size desktop there (in Parsec, switch to it with the client's monitor menu), and the dock screen keeps the dashboard. Plugging in a monitor removes the virtual display at once, and it goes away when deskdash quits. If you sit in front of the dock screen alone while it is on, the menu bar is on a screen you cannot see: right-click the dashboard and untick **Virtual Main Display When Alone**.
+
+  This uses CoreGraphics' private `CGVirtualDisplay`, the API BetterDisplay and DeskPad use for their virtual screens, so a macOS update could change it. `deskdash displays --try-virtual` adds one for 3 s, without changing the main display, to check that yours supports it, and `deskdash displays` lists the displays and which is main.
 
 ## Tips
 

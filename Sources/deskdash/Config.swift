@@ -3,26 +3,43 @@ import Foundation
 /// Settings from config.json (JSON5: comments and trailing commas allowed). Every key is optional;
 /// anything missing falls back to the defaults below, which are also documented in config.example.json.
 struct Config: Codable, Equatable, Sendable {
+    /// The menus' and alerts' language: "" follows macOS, or "en" or "zh-Hant".
+    var language = ""
     var display = Display()
     var pages = Pages()
     var clock = Clock()
     var weather = Weather()
     var markets = Markets()
     var agents = Agents()
+    var limits = Limits()
     var tokens = Tokens()
     var dyson = Dyson()
     var telegram = Telegram()
     var stats = Stats()
     var music = Music()
+    var photos = Photos()
     var schedule = Schedule()
+    var alerts = Alerts()
 
     struct Display: Codable, Equatable, Sendable {
         /// Part of the screen's name as System Settings > Displays shows it. Only that screen is ever covered.
         var match = "Wokyis"
+        /// When a monitor is connected and the dock screen is the main display, make the monitor main.
+        var keepOffMain = false
+        /// When the dock screen is the only display (the Mac used remotely, through Parsec or Screen Sharing), add a
+        /// virtual display of `virtualWidth` x `virtualHeight` points as the main one, until a monitor is connected.
+        /// Uses CoreGraphics' private virtual display API.
+        var virtualMain = false
+        var virtualWidth = 1920
+        var virtualHeight = 1080
+        var virtualHiDPI = false
+        /// When the dock screen goes black (`schedule.idleMinutes`, `schedule.sleep`), also turn its panel off over
+        /// DDC/CI, backlight and all, if it takes the command. Otherwise it is only drawn black.
+        var powerOff = true
     }
 
     struct Pages: Codable, Equatable, Sendable {
-        var order = ["clock", "music", "climate", "markets", "agents", "tokens"]  // all but clock and markets only when they have data
+        var order = ["clock", "music", "photos", "climate", "markets", "agents", "limits", "tokens"]  // all but clock and markets only when they have data
         var seconds = 12.0
         var durations: [String: Double] = ["clock": 15]
     }
@@ -71,6 +88,18 @@ struct Config: Codable, Equatable, Sendable {
         var jumpOnWaiting = true
         var jumpOnDone = true
         var holdSeconds = 20.0
+    }
+
+    struct Limits: Codable, Equatable, Sendable {
+        /// Where hooks/claude-statusline.sh copies the plan's limits from Claude Code's status line
+        /// (scripts/install-claude-statusline.sh sets it up). "" leaves Claude out.
+        var claude = "~/.local/state/deskdash/limits/claude.json"
+        /// Codex's home: the logs in its sessions/ carry the plan's limits after every reply. "" leaves Codex out.
+        var codex = "~/.codex"
+        /// Alert when either window has less than this percent left: once per window, until it resets.
+        var alertBelow = 20.0
+        /// ...and jump to the limits page.
+        var jumpOnAlert = true
     }
 
     struct Tokens: Codable, Equatable, Sendable {
@@ -124,6 +153,19 @@ struct Config: Codable, Equatable, Sendable {
         var takeoverSeconds = 5.0
     }
 
+    struct Photos: Codable, Equatable, Sendable {
+        /// A folder of pictures (JPEG, HEIC, PNG and the like), its subfolders included, for the photos page. "" has none.
+        var folder = ""
+        /// An album in the Photos app, by the name it shows there (Favorites, a shared album, one of yours). When set, it
+        /// takes the folder's place. `deskdash ctl albums` logs the names.
+        var album = ""
+        var shuffle = true
+        /// Crop each picture to fill the screen. false shows it whole, over a blurred copy of itself.
+        var fill = false
+        /// The time and date in the corner.
+        var clock = true
+    }
+
     struct Schedule: Codable, Equatable, Sendable {
         /// "HH:MM-HH:MM": hold the displays awake in this window. "" never does.
         var keepAwake = "08:00-23:00"
@@ -132,6 +174,34 @@ struct Config: Codable, Equatable, Sendable {
         var dim = "23:00-08:00"
         var dimBrightness = 0.35
         var dayBrightness = 1.0
+        /// Turn the dock screen black after this many minutes without keyboard or mouse input; any input, or an alert,
+        /// brings it back. 0 never does.
+        var idleMinutes = 0.0
+        /// "HH:MM-HH:MM": sleep hours, when the dock screen stays black whatever happens, and the displays may sleep.
+        /// "" has none.
+        var sleep = ""
+    }
+
+    struct Alerts: Codable, Equatable, Sendable {
+        /// A sound when a session needs you, when one finishes, and when a limit runs low.
+        var sound = false
+        /// ...and a card at the top right of the main screen that says what for, until it is over or closed.
+        var card = false
+        /// macOS's alert sounds by name (/System/Library/Sounds: Glass, Hero, Funk, Ping, ...); "" stays quiet.
+        var waiting = "Glass"
+        var done = "Hero"
+        var limit = "Funk"
+        var volume = 1.0
+        /// Ring through Notification Center: a notification on the main screen says what it is for, and macOS keeps it
+        /// quiet in a Focus (Sleep among them), as it does any app's. false plays the sound directly, Focus or not;
+        /// `volume` applies only then.
+        var notify = true
+        /// Play it again until someone uses the Mac's keyboard or mouse, or what it rang for is over: first after
+        /// `repeatSeconds`, each wait half as long again as the last, up to `repeatMaxSeconds`. 0 plays it once.
+        var repeatSeconds = 30.0
+        var repeatMaxSeconds = 180.0
+        /// No sound in the night window (`schedule.dim`).
+        var quietAtNight = true
     }
 }
 
@@ -140,25 +210,36 @@ extension Config {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Config()
+        language = try c.get(.language, d.language)
         display = try c.get(.display, d.display)
         pages = try c.get(.pages, d.pages)
         clock = try c.get(.clock, d.clock)
         weather = try c.get(.weather, d.weather)
         markets = try c.get(.markets, d.markets)
         agents = try c.get(.agents, d.agents)
+        limits = try c.get(.limits, d.limits)
         tokens = try c.get(.tokens, d.tokens)
         dyson = try c.get(.dyson, d.dyson)
         telegram = try c.get(.telegram, d.telegram)
         stats = try c.get(.stats, d.stats)
         music = try c.get(.music, d.music)
+        photos = try c.get(.photos, d.photos)
         schedule = try c.get(.schedule, d.schedule)
+        alerts = try c.get(.alerts, d.alerts)
     }
 }
 
 extension Config.Display {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        match = try c.get(.match, Self().match)
+        let d = Self()
+        match = try c.get(.match, d.match)
+        keepOffMain = try c.get(.keepOffMain, d.keepOffMain)
+        virtualMain = try c.get(.virtualMain, d.virtualMain)
+        virtualWidth = try c.get(.virtualWidth, d.virtualWidth)
+        virtualHeight = try c.get(.virtualHeight, d.virtualHeight)
+        virtualHiDPI = try c.get(.virtualHiDPI, d.virtualHiDPI)
+        powerOff = try c.get(.powerOff, d.powerOff)
     }
 }
 
@@ -217,6 +298,17 @@ extension Config.Agents {
     }
 }
 
+extension Config.Limits {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        claude = try c.get(.claude, d.claude)
+        codex = try c.get(.codex, d.codex)
+        alertBelow = try c.get(.alertBelow, d.alertBelow)
+        jumpOnAlert = try c.get(.jumpOnAlert, d.jumpOnAlert)
+    }
+}
+
 extension Config.Tokens {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -268,6 +360,18 @@ extension Config.Music {
     }
 }
 
+extension Config.Photos {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        folder = try c.get(.folder, d.folder)
+        album = try c.get(.album, d.album)
+        shuffle = try c.get(.shuffle, d.shuffle)
+        fill = try c.get(.fill, d.fill)
+        clock = try c.get(.clock, d.clock)
+    }
+}
+
 extension Config.Schedule {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -276,6 +380,25 @@ extension Config.Schedule {
         dim = try c.get(.dim, d.dim)
         dimBrightness = try c.get(.dimBrightness, d.dimBrightness)
         dayBrightness = try c.get(.dayBrightness, d.dayBrightness)
+        idleMinutes = try c.get(.idleMinutes, d.idleMinutes)
+        sleep = try c.get(.sleep, d.sleep)
+    }
+}
+
+extension Config.Alerts {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        sound = try c.get(.sound, d.sound)
+        card = try c.get(.card, d.card)
+        waiting = try c.get(.waiting, d.waiting)
+        done = try c.get(.done, d.done)
+        limit = try c.get(.limit, d.limit)
+        volume = try c.get(.volume, d.volume)
+        notify = try c.get(.notify, d.notify)
+        repeatSeconds = try c.get(.repeatSeconds, d.repeatSeconds)
+        repeatMaxSeconds = try c.get(.repeatMaxSeconds, d.repeatMaxSeconds)
+        quietAtNight = try c.get(.quietAtNight, d.quietAtNight)
     }
 }
 
