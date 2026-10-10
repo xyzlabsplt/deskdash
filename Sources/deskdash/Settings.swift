@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable {
-    case general, weather, photos, markets, telegram, agents, purifier
+    case general, weather, photos, markets, telegram, agents, alerts, purifier
 }
 
 /// The Settings window's state. It is an @Observable class, not @State: in this SDK @State is a SwiftUI macro,
@@ -26,6 +26,10 @@ final class SettingsModel {
     var photosFromAlbum: Bool
     var albums: [String] = []
     var albumsStatus = ""
+    /// Whether deskdash's Codex hook and Claude status line are installed; nil until looked at.
+    var codexHooks: Bool?
+    var statusLine: Bool?
+    var installNote = ""
     let purifier: PurifierSetup
 
     @ObservationIgnored let dash: Dashboard
@@ -65,6 +69,34 @@ final class SettingsModel {
     /// A binding to the window's own state (search text and so on).
     func field<T>(_ path: ReferenceWritableKeyPath<SettingsModel, T>) -> Binding<T> {
         Binding(get: { self[keyPath: path] }, set: { self[keyPath: path] = $0 })
+    }
+
+    func checkInstalls() {
+        let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
+        let hooks = (try? String(contentsOfFile: codexHome + "/hooks.json", encoding: .utf8)) ?? ""
+        codexHooks = hooks.contains("agent-status.sh codex")
+        let claude = (try? String(contentsOfFile: NSHomeDirectory() + "/.claude/settings.json", encoding: .utf8)) ?? ""
+        statusLine = claude.contains("claude-statusline.sh")
+    }
+
+    /// Runs one of the checkout's scripts/ (they back up what they change), and shows the last thing it printed.
+    func install(_ script: String) async {
+        installNote = L10n.t("Installing…")
+        let path = Paths.root.appendingPathComponent("scripts/" + script).path
+        let output: String? = await Task.detached {
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [path]
+            process.standardOutput = pipe
+            process.standardError = pipe
+            guard (try? process.run()) != nil else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+        }.value
+        installNote = output?.split(separator: "\n").last.map(String.init) ?? L10n.f("Could not run %@.", script)
+        checkInstalls()
     }
 
     /// The Photos app's album names, for the photos tab's picker. Reading them asks for the library the first time.
@@ -120,12 +152,15 @@ struct SettingsView: View {
             AgentsSettings(model: model)
                 .tabItem { Label(L10n.t("Agents"), systemImage: "sparkles") }
                 .tag(SettingsTab.agents)
+            AlertsSettings(model: model)
+                .tabItem { Label(L10n.t("Alerts"), systemImage: "bell") }
+                .tag(SettingsTab.alerts)
             PurifierSettings(model: model)
                 .tabItem { Label(L10n.t("Purifier"), systemImage: "wind") }
                 .tag(SettingsTab.purifier)
         }
         .padding(16)
-        .frame(width: 640, height: 560)
+        .frame(width: 680, height: 580)
     }
 }
 
@@ -682,7 +717,32 @@ private struct AgentsSettings: View {
     let model: SettingsModel
 
     var body: some View {
+        let dash = model.dash
+        let claude = dash.limits.first { $0.kind == .claude }
+        let codex = dash.limits.first { $0.kind == .codex }
         Form {
+            Section(L10n.t("Sources")) {
+                SourceRow(title: L10n.t("Claude Code sessions"), ok: model.draft.agents.claude,
+                          status: model.draft.agents.claude
+                              ? L10n.f("Reading · %@ open now", "\(dash.sessions.filter { $0.kind == .claude }.count)")
+                              : L10n.t("Off"))
+                SourceRow(title: L10n.t("Codex sessions"), ok: model.codexHooks == true,
+                          status: model.codexHooks == true ? L10n.t("Hook installed") : L10n.t("Not installed")) {
+                    if model.codexHooks != true {
+                        Button(L10n.t("Install the hook")) { Task { await model.install("install-codex-hooks.sh") } }
+                    }
+                }
+                SourceRow(title: L10n.t("Claude plan limits"), ok: fresh(claude), status: report(claude))
+                SourceRow(title: L10n.t("Codex plan limits"), ok: fresh(codex), status: report(codex))
+                if !model.installNote.isEmpty {
+                    Text(model.installNote).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                Text(L10n.t("Claude's limits update while you talk with Claude in the desktop app, and from the status line "
+                    + "when you use Claude Code in a terminal. Codex reports its limits after each reply, in its own logs.")
+                    + (model.codexHooks == true ? "" : L10n.space + L10n.t("After installing, type /hooks in Codex once to trust it.")))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section(L10n.t("Sessions")) {
                 Toggle(L10n.t("Show Claude Code sessions"), isOn: model.setting(\.agents.claude))
                 StepSlider(title: L10n.t("A finished session shows DONE for"), value: model.setting(\.agents.doneMinutes),
@@ -690,73 +750,109 @@ private struct AgentsSettings: View {
                 StepSlider(title: L10n.t("Hide idle sessions after"), value: model.setting(\.agents.maxIdleHours),
                            steps: [1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48, 72], format: { "\(Int($0)) " + L10n.t("h") })
             }
-            Section(L10n.t("Alerts")) {
-                Toggle(L10n.t("Jump to the agents page when a session needs you"), isOn: model.setting(\.agents.jumpOnWaiting))
-                Toggle(L10n.t("…and briefly when one finishes"), isOn: model.setting(\.agents.jumpOnDone))
-                StepSlider(title: L10n.t("Hold the agents page for"), value: model.setting(\.agents.holdSeconds),
-                           steps: [5, 10, 15, 20, 30, 45, 60, 90, 120])
+            Section(L10n.t("Token usage")) {
+                StepSlider(title: L10n.t("Weeks in the heatmap"), value: weeks, steps: [13, 26, 39, 52], format: { "\(Int($0))" })
+                Text(L10n.t("Counted from the logs Claude Code, Codex, Gemini CLI and Muse Code keep on this Mac, reading only "
+                    + "their token counts."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Section(L10n.t("Sound and card")) {
+        }
+        .formStyle(.grouped)
+        .task { model.checkInstalls() }
+    }
+
+    /// A report from the last hour.
+    private func fresh(_ limits: AgentLimits?) -> Bool {
+        limits.map { model.dash.now.timeIntervalSince($0.updated) < 3600 } ?? false
+    }
+
+    /// "MAX · updated 5m ago", or that there is none.
+    private func report(_ limits: AgentLimits?) -> String {
+        guard let limits else { return L10n.t("No report yet") }
+        let age = Fmt.duration(model.dash.now.timeIntervalSince(limits.updated))
+        return limits.plan.map { L10n.f("%@ · updated %@ ago", $0.uppercased(), age) } ?? L10n.f("Updated %@ ago", age)
+    }
+
+    private var weeks: Binding<Double> {
+        Binding(get: { Double(model.draft.tokens.span) }, set: { count in model.update { $0.tokens.weeks = Int(count) } })
+    }
+}
+
+/// One of the places deskdash reads from: a mark for whether it works, what it says, and a button to set it up.
+private struct SourceRow<Action: View>: View {
+    let title: String
+    let ok: Bool
+    let status: String
+    @ViewBuilder var action: () -> Action
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .foregroundStyle(ok ? Color.green : Color.orange)
+                Text(status).foregroundStyle(.secondary)
+                action()
+            }
+        }
+    }
+}
+
+extension SourceRow where Action == EmptyView {
+    init(title: String, ok: Bool, status: String) {
+        self.init(title: title, ok: ok, status: status) { EmptyView() }
+    }
+}
+
+// MARK: Alerts
+
+private struct AlertsSettings: View {
+    let model: SettingsModel
+
+    var body: some View {
+        let alerts = model.draft.alerts
+        Form {
+            Section(L10n.t("Sound")) {
                 Toggle(L10n.t("Play a sound until you are back"), isOn: model.setting(\.alerts.sound))
-                if model.draft.alerts.sound {
+                if alerts.sound {
                     SoundPicker(title: L10n.t("When a session needs you"), name: model.setting(\.alerts.waiting))
                     SoundPicker(title: L10n.t("When a session finishes"), name: model.setting(\.alerts.done))
                     SoundPicker(title: L10n.t("When a plan limit runs low"), name: model.setting(\.alerts.limit))
                     StepSlider(title: L10n.t("Ring again after"), value: model.setting(\.alerts.repeatSeconds),
                                steps: [0, 15, 20, 30, 45, 60, 90, 120],
                                format: { $0 == 0 ? L10n.t("Once") : StepSlider.duration($0) })
-                    StepSlider(title: L10n.t("Then at most every"), value: model.setting(\.alerts.repeatMaxSeconds),
-                               steps: [60, 120, 180, 300, 600, 900])
+                    if alerts.repeatSeconds > 0 {
+                        StepSlider(title: L10n.t("Then at most every"), value: model.setting(\.alerts.repeatMaxSeconds),
+                                   steps: [60, 120, 180, 300, 600, 900])
+                    }
                     Toggle(L10n.t("Through Notification Center, so a Focus or Sleep keeps it quiet"),
                            isOn: model.setting(\.alerts.notify))
                     Toggle(L10n.t("No sound at night"), isOn: model.setting(\.alerts.quietAtNight))
                 }
-                Toggle(L10n.t("Show a card on the dock screen until it is over"), isOn: model.setting(\.alerts.card))
-                Text(L10n.t("The sound stops when someone uses this Mac's keyboard or mouse. Click the dashboard to close the card."))
+                Text(L10n.t("The sound stops when someone uses this Mac's keyboard or mouse."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Section(L10n.t("Card")) {
+                Toggle(L10n.t("Show a card on the dock screen until it is over"), isOn: model.setting(\.alerts.card))
+                Text(L10n.t("Click the dashboard to close the card."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section(L10n.t("Jumping to a page")) {
+                Toggle(L10n.t("Jump to the agents page when a session needs you"), isOn: model.setting(\.agents.jumpOnWaiting))
+                Toggle(L10n.t("…and briefly when one finishes"), isOn: model.setting(\.agents.jumpOnDone))
+                StepSlider(title: L10n.t("Hold the agents page for"), value: model.setting(\.agents.holdSeconds),
+                           steps: [5, 10, 15, 20, 30, 45, 60, 90, 120])
             }
             Section(L10n.t("Plan limits")) {
                 StepSlider(title: L10n.t("Alert when less than this is left"), value: model.setting(\.limits.alertBelow),
                            steps: [0, 5, 10, 15, 20, 25, 30, 40, 50],
                            format: { $0 == 0 ? L10n.t("Never") : "\(Int($0))%" })
                 Toggle(L10n.t("…and jump to the limits page"), isOn: model.setting(\.limits.jumpOnAlert))
-                Text(L10n.t("Codex reports its limits in its own logs. Claude Code reports them to its status line, in a "
-                    + "terminal; run this in Terminal to pass them on:"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                CommandRow(command: Self.script("install-claude-statusline.sh"))
-            }
-            Section(L10n.t("Token usage")) {
-                StepSlider(title: L10n.t("Weeks in the heatmap"), value: weeks, steps: [13, 26, 39, 52], format: { "\(Int($0))" })
-                let history = model.draft.tokens.history
-                Text(L10n.t("Counted from the logs Claude Code, Codex, Gemini CLI and Muse Code keep on this Mac, reading only "
-                    + "their token counts.") + L10n.space + (history.isEmpty ? "" : L10n.f("Each day's totals are also kept in %@, "
-                    + "since Claude Code deletes transcripts after 30 days.", history) + L10n.space)
-                    + L10n.t("The Tokens page is under General → Pages."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section(L10n.t("Codex")) {
-                Text(L10n.t("Codex sessions appear once deskdash's hook is installed. Run this in Terminal:"))
-                    .foregroundStyle(.secondary)
-                CommandRow(command: Self.script("install-codex-hooks.sh"))
-                Text(L10n.t("Then type /hooks in Codex to trust it."))
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var weeks: Binding<Double> {
-        Binding(get: { Double(model.draft.tokens.span) }, set: { count in model.update { $0.tokens.weeks = Int(count) } })
-    }
-
-    /// A script's full path, quoted for the shell if it needs it.
-    private static func script(_ name: String) -> String {
-        let path = Paths.root.appendingPathComponent("scripts/" + name).path
-        let plain = path.allSatisfy { $0.isLetter || $0.isNumber || "/._-+@%".contains($0) }
-        return plain ? path : "'" + path.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 }
 

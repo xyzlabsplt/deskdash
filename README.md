@@ -12,14 +12,15 @@ One native Swift binary, no dependencies, about 1 KB/s of network, nothing liste
 
 The pages rotate every 12 s (the clock gets 15 s). Click the dashboard for the next page. Clicks do not take focus from the app you are working in.
 
-**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has seven tabs:
+**Controls and Settings.** A gauge icon in the menu bar opens deskdash's menu: jump to a page, next or previous page, pause the rotation, **Hide for 10 Minutes**, **Settings…**, and **Quit**. Right-clicking the dashboard gives the short version of the same menu. Settings has eight tabs:
 
 - **General**: the language, which screen, keeping the dock screen from being the main display (see [When the dock screen is the main display](#when-the-dock-screen-is-the-main-display)), which pages rotate and for how long, what the clock page shows (12/24-hour, system stats, the playing track), the Now Playing takeover and covers, the keep-awake schedule, and the brightness by day and at night.
 - **Weather & Time**: search for your city (Open-Meteo, no key). Until you choose one there is no weather. Optionally the clock follows that place's time zone, and the clock page then names the city.
 - **Photos**: an album from the Photos app, picked from a list, or a folder, and how the pictures show.
 - **Markets**: add, reorder, or remove Hyperliquid symbols, each checked against Hyperliquid's list.
 - **Telegram**: add or remove public channels, each checked through its public preview, and preview a channel's newest post on the dock screen.
-- **Agents**: the alert behavior, the sounds (each with a play button) and the card, the low-limit alert, the weeks in the token heatmap, and the commands that install the Claude status line and the Codex hook. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
+- **Agents**: where each agent's sessions and limits come from, with whether each works and when it last reported, and a button that installs the Codex hook; how long finished and idle sessions show; the weeks in the token heatmap.
+- **Alerts**: the sounds (each with a play button) and how they repeat, the card, the jumps to the agents page, and the low-limit alert. **Purifier**: connecting the Dyson purifier (see [Climate](#climate-the-dyson-purifier)), its status, and a fixed address.
 
 Changes apply at once and are saved to `config.json`, writing only what differs from the defaults. `deskdash config` prints that.
 
@@ -138,7 +139,8 @@ The limits page reads what each agent itself reports about your plan. deskdash n
   scripts/install-claude-statusline.sh
   ```
 
-  `--remove` puts back what was there. The status line runs in Claude Code in a terminal. Claude's desktop app does not run it, so sessions there do not update the page.
+  `--remove` puts back what was there. The status line runs in Claude Code in a terminal; Claude's desktop app runs none.
+- **Claude Code in the desktop app**: the app shows the plan's limits on its usage card, and a Claude session in the app can read them with the app's `get_usage` tool. `hooks/claude-usage.sh` takes that tool's JSON on stdin and writes the same file the status line does, with the plan's name. Nothing runs it on a timer, since each run would be a Claude session spending the plan it measures: put a line in your `~/.claude/CLAUDE.md` asking Claude to call `get_usage` and pipe it into the script before ending a turn when the file is more than 15 minutes old, and the page stays current while you work, which is when the numbers move. Settings → Agents shows when each agent's limits were last reported.
 
 A window past its reset time shows as started over until the agent reports again. The numbers are only as fresh as the agent's last reply: usage elsewhere (claude.ai, the ChatGPT apps) shows up after the next one. `deskdash limits` prints what the page would show, with when each window resets and when it would run out at the pace so far. In `config.json`, `limits.claude` and `limits.codex` point elsewhere (`""` leaves one out), `limits.alertBelow` moves the 20% alert, and `limits.jumpOnAlert` turns its jump off.
 

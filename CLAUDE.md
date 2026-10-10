@@ -33,7 +33,7 @@ A full-screen dashboard for the Wokyis dock's 5" 1280×720 screen: clock and wea
 - `MQTT.swift` (a minimal MQTT 3.1 client), `Dyson.swift` (the purifier service and its readings), `DysonSetup.swift` (connecting the purifier: the steps Settings → Purifier and `deskdash dyson setup | test` share, including the one-time Dyson cloud login).
 - `Telegram.swift`: watches public channels through their `t.me/s/<name>` preview and hands new posts to `Dashboard.notify`, which shows each one as a `TelegramCard` for `telegram.seconds`.
 - `Settings.swift`: the Settings window (`SettingsModel` holds its state; `PurifierSetup` the Purifier tab's setup steps). `AppDelegate` owns the menu bar icon and shared menu, and saves through `ConfigStore.save`, which writes only what differs from the defaults. The window is a `SettingsPanel`, a non-activating panel: since macOS 14 `NSApp.activate()` is only a request the system may refuse, and the panel comes to the front with the keyboard either way. Keep it one.
-- `hooks/agent-status.sh`: Codex lifecycle hook, installed by `scripts/install-codex-hooks.sh`. `hooks/claude-statusline.sh`: Claude Code's status line, which copies the plan's limits for the limits page, installed by `scripts/install-claude-statusline.sh`. `scripts/install-service.sh`: the LaunchAgent.
+- `hooks/agent-status.sh`: Codex lifecycle hook, installed by `scripts/install-codex-hooks.sh`. `hooks/claude-statusline.sh`: Claude Code's status line, which copies the plan's limits for the limits page, installed by `scripts/install-claude-statusline.sh`. `hooks/claude-usage.sh`: the same file from the Claude desktop app's `get_usage` JSON, for Claude Code in the app. `scripts/install-service.sh`: the LaunchAgent.
 
 ## Rules
 

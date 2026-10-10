@@ -59,6 +59,8 @@ struct AgentLimits: Identifiable, Equatable, Sendable {
 /// Reads the limits where each agent leaves them:
 ///  - Claude Code hands its status line command the plan's rate limits, and hooks/claude-statusline.sh copies them
 ///    to `limits.claude`: { updatedAt, rate_limits: { five_hour, seven_day: { used_percentage, resets_at } } }.
+///    For Claude Code in the desktop app, which runs no status line, hooks/claude-usage.sh writes the same file from
+///    the app's own usage card, with the plan's name.
 ///  - Codex logs a token_count event after every reply, with rate_limits: { primary, secondary: { used_percent,
 ///    window_minutes, resets_at } } and the plan_type. Only the newest log's tail is read, and only those events.
 actor LimitsReader {
@@ -89,7 +91,7 @@ actor LimitsReader {
         let week = window("seven_day", 7 * 86400)
         guard session != nil || week != nil else { return nil }
         let updated = Self.number(root["updatedAt"]).map(Date.init(ms:)) ?? Date()
-        return AgentLimits(kind: .claude, plan: nil, session: session, week: week, updated: updated)
+        return AgentLimits(kind: .claude, plan: root["plan"] as? String, session: session, week: week, updated: updated)
     }
 
     // MARK: Codex
