@@ -1128,12 +1128,18 @@ struct LimitFigure: View {
 
     var body: some View {
         let color = LimitStyle.color(window, now)
+        // "100%" is three digits wide: rather than cut it short, the number shrinks a little, and the caption, small
+        // already, keeps its size.
         HStack(alignment: .firstTextBaseline, spacing: 20) {
             Text("\(Int(window.left.rounded()))%")
                 .font(Theme.font(size, .bold))
                 .monospacedDigit()
                 .foregroundStyle(color == Theme.up ? Theme.text : color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             TokenCaption(text: caption)
+                .fixedSize()
+                .layoutPriority(1)
         }
     }
 }
