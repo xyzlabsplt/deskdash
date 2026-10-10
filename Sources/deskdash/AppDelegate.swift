@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let music: NowPlayingService
     private let tokens: TokensService
     private let limits: LimitsService
+    private let displays = DisplayManager()
     private var window: NSWindow?
     private var displayAssertion: IOPMAssertionID = 0
     private var hiddenUntil: Date?
@@ -88,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             tokens.tick()
             limits.tick()
             if n % 5 == 0 {
+                if !options.windowed { displays.check() }
                 let silent = dash.config.alerts.sound && SystemAudio.isSilent
                 if silent != dash.soundSilent { dash.soundSilent = silent }
             }
@@ -119,13 +121,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         stats.apply(dash.config.stats)
         tokens.apply(dash.config.tokens, enabled: dash.config.pages.order.contains("tokens"))
         limits.apply(dash.config.limits, enabled: dash.config.pages.order.contains("limits"))
+        if !options.windowed { displays.apply(dash.config.display) }
         placeWindow()
         updateDisplayAssertion()
     }
 
     // MARK: window
 
-    @objc private func screensChanged() { placeWindow() }
+    @objc private func screensChanged() {
+        if !options.windowed { displays.check() }
+        placeWindow()
+    }
 
     /// Covers the screen whose name contains `display.match`, and only that one. If it is unplugged the
     /// window hides rather than landing on another display, and comes back when it reappears.
@@ -271,6 +277,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             pause.state = dash.paused ? .on : .off
             items.append(pause)
         }
+        // In the dashboard's own right-click menu too: with a virtual main display, the menu bar is on a screen that
+        // someone sitting at the dock screen cannot see, and this is the way back.
+        let virtual = item("Virtual Main Display When Alone", #selector(menuToggleVirtual))
+        virtual.state = dash.config.display.virtualMain ? .on : .off
+        items += [.separator(), virtual]
         items.append(.separator())
         items.append(hiddenUntil == nil ? item("Hide for 10 Minutes", #selector(menuHide))
                                         : item("Show Dashboard", #selector(menuShow)))
@@ -284,6 +295,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func menuPrevious() { dash.advance(-1) }
     @objc private func menuTogglePause() { dash.paused.toggle() }
     @objc private func menuHide() { hide(minutes: 10) }
+
+    @objc private func menuToggleVirtual() {
+        var config = dash.config
+        config.display.virtualMain.toggle()
+        commitSettings(config)
+    }
     @objc private func menuSettings() { openSettings() }
     @objc private func menuQuit() { quit() }
 

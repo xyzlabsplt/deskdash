@@ -4,6 +4,12 @@
 {
   "display": {
     "match": "Wokyis",              // part of the screen's name in System Settings > Displays; only it is covered
+    "keepOffMain": false,           // when a monitor is connected and the dock screen is main, make the monitor main
+    "virtualMain": false,           // when the dock screen is the only display (used remotely, e.g. Parsec), add a
+                                    // virtual main display until a monitor is connected (a private macOS API)
+    "virtualWidth": 1920,           // its size in points
+    "virtualHeight": 1080,
+    "virtualHiDPI": false,          // render it at twice that, like a Retina display
   },
   "pages": {
     "order": ["clock", "music", "climate", "markets", "agents", "limits", "tokens"],  // all but clock and markets only rotate in when they have data

@@ -206,6 +206,15 @@ deskdash has no account of its own and no server. It only talks to:
 - **Spotify or Apple**: the playing track, once per album, while covers are on.
 - **Dyson**: your account email, the emailed code, and your password, once, and only if you connect the purifier through your account. After that, deskdash talks to the purifier on your own network only.
 
+## When the dock screen is the main display
+
+macOS opens windows and dialogs on the main display, so while the dock screen is main the dashboard stays behind them. Two settings in `config.json` keep it from being main:
+
+- `"display": { "keepOffMain": true }`: when a monitor is connected and the dock screen is main, deskdash makes the monitor main, as dragging the menu bar in System Settings → Displays does, and the arrangement is kept for that set of displays.
+- `"display": { "virtualMain": true }`: for a Mac you sometimes use remotely, through Parsec or Screen Sharing, with no monitor plugged in. Once the dock screen has been the only display for 10 s, deskdash adds a virtual display (1920×1080 points by default; `virtualWidth`, `virtualHeight`, `virtualHiDPI`) and makes it main. The remote session gets a full-size desktop there (in Parsec, switch to it with the client's monitor menu), and the dock screen keeps the dashboard. Plugging in a monitor removes the virtual display at once, and it goes away when deskdash quits. If you sit in front of the dock screen alone while it is on, the menu bar is on a screen you cannot see: right-click the dashboard and untick **Virtual Main Display When Alone**.
+
+  This uses CoreGraphics' private `CGVirtualDisplay`, the API BetterDisplay and DeskPad use for their virtual screens, so a macOS update could change it. `deskdash displays --try-virtual` adds one for 3 s, without changing the main display, to check that yours supports it, and `deskdash displays` lists the displays and which is main.
+
 ## Tips
 
 - Keep the big monitor as the main display (System Settings → Displays → Arrange, where the white menu bar sits).

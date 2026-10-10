@@ -21,6 +21,15 @@ struct Config: Codable, Equatable, Sendable {
     struct Display: Codable, Equatable, Sendable {
         /// Part of the screen's name as System Settings > Displays shows it. Only that screen is ever covered.
         var match = "Wokyis"
+        /// When a monitor is connected and the dock screen is the main display, make the monitor main.
+        var keepOffMain = false
+        /// When the dock screen is the only display (the Mac used remotely, through Parsec or Screen Sharing), add a
+        /// virtual display of `virtualWidth` x `virtualHeight` points as the main one, until a monitor is connected.
+        /// Uses CoreGraphics' private virtual display API.
+        var virtualMain = false
+        var virtualWidth = 1920
+        var virtualHeight = 1080
+        var virtualHiDPI = false
     }
 
     struct Pages: Codable, Equatable, Sendable {
@@ -196,7 +205,13 @@ extension Config {
 extension Config.Display {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        match = try c.get(.match, Self().match)
+        let d = Self()
+        match = try c.get(.match, d.match)
+        keepOffMain = try c.get(.keepOffMain, d.keepOffMain)
+        virtualMain = try c.get(.virtualMain, d.virtualMain)
+        virtualWidth = try c.get(.virtualWidth, d.virtualWidth)
+        virtualHeight = try c.get(.virtualHeight, d.virtualHeight)
+        virtualHiDPI = try c.get(.virtualHiDPI, d.virtualHiDPI)
     }
 }
 

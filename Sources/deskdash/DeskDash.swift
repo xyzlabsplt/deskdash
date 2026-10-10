@@ -1,4 +1,5 @@
 import AppKit
+import VirtualDisplay
 
 /// deskdash: a glanceable, always-on dashboard for the Wokyis dock's 5" 1280x720 screen.
 /// One borderless window covers that screen; nothing listens on a port.
@@ -20,6 +21,21 @@ enum DeskDash {
             Control.send(words)
         case .windows:
             MainActor.assumeIsolated { WindowScan.report() }
+        case .displays:
+            MainActor.assumeIsolated {
+                _ = NSApplication.shared
+                DisplayManager.report()
+                guard options.tryVirtual else { return }
+                print("\nAdding a 1920x1080 virtual display for 3 s, without changing the main display:")
+                var display = DDVirtualDisplay(name: "deskdash test", width: 1920, height: 1080, hiDPI: false)
+                guard display != nil else { return print("could not add one: this macOS may have changed its private API") }
+                RunLoop.main.run(until: Date().addingTimeInterval(3))
+                DisplayManager.report()
+                display = nil
+                RunLoop.main.run(until: Date().addingTimeInterval(2))
+                print("\nRemoved it:")
+                DisplayManager.report()
+            }
         case .music:
             let listener = MainActor.assumeIsolated {
                 setvbuf(stdout, nil, _IOLBF, 0)  // a line at a time, even into a pipe
@@ -91,7 +107,7 @@ enum DeskDash {
 }
 
 struct Options: Sendable {
-    enum Command: Equatable, Sendable { case run, snapshot, ctl([String]), windows, music, tokens, limits, dyson([String]), config, help }
+    enum Command: Equatable, Sendable { case run, snapshot, ctl([String]), windows, displays, music, tokens, limits, dyson([String]), config, help }
 
     var command = Command.run
     var configPath: String?
@@ -100,6 +116,7 @@ struct Options: Sendable {
     var noAgents = false
     var save = false
     var watch = false
+    var tryVirtual = false
     var outDir = "snapshots"
     var only: [String] = []
 
@@ -124,6 +141,9 @@ struct Options: Sendable {
           Print the settings that differ from the defaults. --save rewrites the file the way Settings does.
       deskdash windows
           List each display and the other apps' windows on it: what makes the dashboard stay behind them.
+      deskdash displays [--try-virtual]
+          List the displays, which is main, and where each sits. --try-virtual adds a virtual display for 3 s, without
+          changing the main display, to check that this macOS supports display.virtualMain.
       deskdash music [--config FILE]
           Print what Music and Spotify on this Mac announce, as they announce it, and each cover found.
       deskdash tokens [--config FILE] [--watch]
@@ -152,6 +172,10 @@ struct Options: Sendable {
             return o
         case "windows":
             o.command = .windows
+            return o
+        case "displays":
+            o.command = .displays
+            o.tryVirtual = args.dropFirst().contains("--try-virtual")
             return o
         case "music":
             o.command = .music
