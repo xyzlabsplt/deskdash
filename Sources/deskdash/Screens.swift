@@ -9,18 +9,18 @@ extension NSScreen {
 /// What else is on a display, so the dashboard never hides a window. Reading window bounds and owners needs no
 /// screen-recording permission (window titles would, and are not read).
 enum WindowScan {
-    /// Owners of windows overlapping `display` by at least 40x40 pt, other than the dashboard panel itself
-    /// (deskdash's own Settings window counts). Layers 0..<20 hold ordinary, floating, modal and utility
+    /// Owners of windows overlapping `display` by at least 40x40 pt, other than the dashboard panel itself and the alert
+    /// card floating over it (deskdash's own Settings window counts). Layers 0..<20 hold ordinary, floating, modal and utility
     /// windows. The Dock (20), menu bar (24) and system overlays sit higher, and the desktop picture and icons
     /// are excluded.
-    static func otherAppWindows(on display: CGDirectDisplayID, excluding panel: Int? = nil) -> [String] {
+    static func otherAppWindows(on display: CGDirectDisplayID, excluding own: Set<Int> = []) -> [String] {
         let bounds = CGDisplayBounds(display)
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
         return list.compactMap { w in
             guard let layer = w[kCGWindowLayer as String] as? Int, (0..<20).contains(layer),
                   let pid = w[kCGWindowOwnerPID as String] as? pid_t,
-                  w[kCGWindowNumber as String] as? Int != panel,
+                  !own.contains(w[kCGWindowNumber as String] as? Int ?? -1),
                   (w[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
                   let dict = w[kCGWindowBounds as String] as? NSDictionary,
                   let frame = CGRect(dictionaryRepresentation: dict as CFDictionary)

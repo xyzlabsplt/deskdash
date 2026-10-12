@@ -20,6 +20,8 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>deskdash reads the sensors of the Dyson air purifier on your home network.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>deskdash shows the pictures of the album you chose (photos.album) on the dock screen. It only reads them.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_dyson_mqtt._tcp</string>

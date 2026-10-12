@@ -6,6 +6,8 @@ let package = Package(
     name: "deskdash",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "deskdash", path: "Sources/deskdash")
+        // CoreGraphics' private virtual display, wrapped in Objective-C for `display.virtualMain`.
+        .target(name: "VirtualDisplay", path: "Sources/VirtualDisplay"),
+        .executableTarget(name: "deskdash", dependencies: ["VirtualDisplay"], path: "Sources/deskdash"),
     ]
 )

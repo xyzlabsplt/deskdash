@@ -1,4 +1,6 @@
+import AppKit
 import Darwin
+import DiskArbitration
 import Foundation
 import IOKit
 
@@ -15,15 +17,133 @@ struct SystemStats: Equatable, Sendable {
     var memoryUsed: Double  // bytes in active, wired and compressed pages
     var memoryTotal: Double
     var pressure: Pressure
-    var diskUsed: Double?  // share of the startup disk in use, 0...1, with purgeable space counted as free
+    var volumes: [VolumeUsage] = []  // the Mac's own volumes and the attached ones, the startup disk first
     var download: Double?  // bytes a second over the Ethernet and Wi-Fi interfaces
     var upload: Double?
+    // For the system page:
+    var diskRead: Double? = nil  // bytes a second read from and written to the Mac's disks
+    var diskWrite: Double? = nil
+    var swapUsed: Double = 0  // bytes of swap in use
+    var load: Double = 0  // the 1-minute load average: how many threads want a core
 
     var memory: Double { memoryTotal > 0 ? memoryUsed / memoryTotal : 0 }
 
+    /// The volume closest to full: what the clock page's one storage meter shows.
+    var fullest: VolumeUsage? { volumes.max { $0.used < $1.used } }
+
     static let demo = SystemStats(cpu: 0.23, temperature: 51, thermal: .nominal, memoryUsed: 13.4 * 1_073_741_824,
-                                  memoryTotal: 24 * 1_073_741_824, pressure: .normal, diskUsed: 0.48,
-                                  download: 1_240_000, upload: 310_000)
+                                  memoryTotal: 24 * 1_073_741_824, pressure: .normal,
+                                  volumes: [VolumeUsage(name: "Macintosh HD", path: "/", isInternal: true,
+                                                        total: 494_000_000_000, free: 257_000_000_000),
+                                            VolumeUsage(name: "Archive", path: "/Volumes/Archive", isInternal: false,
+                                                        total: 2_000_000_000_000, free: 380_000_000_000)],
+                                  download: 1_240_000, upload: 310_000,
+                                  diskRead: 18_400_000, diskWrite: 3_100_000, swapUsed: 0, load: 2.4)
+}
+
+/// One volume's space: free as Finder counts it, purgeable files included.
+struct VolumeUsage: Equatable, Sendable, Identifiable {
+    let name: String
+    let path: String
+    let isInternal: Bool  // the Mac's own, rather than attached
+    let total: Double  // bytes
+    let free: Double
+
+    var used: Double { total > 0 ? min(1, max(0, 1 - free / total)) : 0 }
+    var id: String { path }
+}
+
+/// The last 10 minutes of the Mac's load, a sample every 2 s, for the system page's graphs.
+struct SystemHistory: Equatable, Sendable {
+    static let capacity = 300
+
+    var cpu: [Double?] = []
+    var temperature: [Double?] = []
+    var memory: [Double?] = []
+    var diskRead: [Double?] = []
+    var diskWrite: [Double?] = []
+
+    mutating func append(_ s: SystemStats) {
+        func push(_ series: inout [Double?], _ value: Double?) {
+            series.append(value)
+            if series.count > Self.capacity { series.removeFirst(series.count - Self.capacity) }
+        }
+        push(&cpu, s.cpu)
+        push(&temperature, s.temperature)
+        push(&memory, s.memory)
+        push(&diskRead, s.diskRead)
+        push(&diskWrite, s.diskWrite)
+    }
+
+    /// Made-up but plausible: a build's burst on a quiet machine.
+    static var demo: SystemHistory {
+        var h = SystemHistory()
+        for i in 0..<capacity {
+            let t = Double(i) / Double(capacity)
+            let burst = max(0, sin((t - 0.55) * .pi * 5)) * (t > 0.55 && t < 0.75 ? 1 : 0)
+            h.cpu.append(0.08 + 0.05 * sin(Double(i) / 7) + 0.6 * burst)
+            h.temperature.append(44 + 4 * sin(Double(i) / 23) + 30 * burst)
+            h.memory.append(0.5 + 0.06 * t + 0.04 * burst)
+            h.diskRead.append(2_000_000 + 60_000_000 * burst + 1_000_000 * abs(sin(Double(i) / 3)))
+            h.diskWrite.append(500_000 + 20_000_000 * burst + 400_000 * abs(cos(Double(i) / 5)))
+        }
+        return h
+    }
+}
+
+/// The processes using the most CPU, for the system page, as Activity Monitor's CPU tab lists them.
+struct ProcessLoad: Equatable, Sendable, Identifiable {
+    let name: String
+    let cpu: Double  // share of all cores, 0...1, like the page's CPU figure
+    var id: String { name }
+
+    static let demo = [ProcessLoad(name: "swift-frontend", cpu: 0.31), ProcessLoad(name: "Safari", cpu: 0.06),
+                       ProcessLoad(name: "WindowServer", cpu: 0.03)]
+}
+
+/// Each process's CPU time from libproc (proc_pid_rusage), compared with the last look: what each used since. Processes
+/// of one name (a browser's helpers) count together. About 2 ms for 600 processes; only while the system page shows.
+final class ProcessSampler: @unchecked Sendable {
+    private var last: [pid_t: UInt64] = [:]
+    private var lastAt: UInt64 = 0
+    private let lock = NSLock()
+
+    func top(_ count: Int) -> [ProcessLoad] {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = mach_absolute_time()
+        var pids = [pid_t](repeating: 0, count: 4096)
+        let n = Int(proc_listallpids(&pids, Int32(MemoryLayout<pid_t>.stride * pids.count)))
+        var times: [pid_t: UInt64] = [:]
+        var byName: [String: UInt64] = [:]
+        for pid in pids.prefix(max(0, n)) where pid > 0 {
+            var info = rusage_info_v2()
+            let ok = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V2, $0) }
+            }
+            guard ok == 0 else { continue }  // another user's process, which this one may not look into
+            let total = info.ri_user_time + info.ri_system_time
+            times[pid] = total
+            guard let before = last[pid], total >= before else { continue }
+            var name = [CChar](repeating: 0, count: 256)
+            proc_name(pid, &name, UInt32(name.count))
+            byName[String(cString: name), default: 0] += total - before
+        }
+        defer {
+            last = times
+            lastAt = now
+        }
+        guard lastAt > 0, now > lastAt else { return [] }
+        // rusage's CPU times count in mach_absolute_time's units, as the wall clock here does, so their ratio is the
+        // share of a core; divided by the cores, the share of all of them.
+        let cores = Double(ProcessInfo.processInfo.activeProcessorCount)
+        let wall = Double(now - lastAt)
+        return byName.filter { !$0.key.isEmpty }
+            .map { ProcessLoad(name: $0.key, cpu: Double($0.value) / (wall * cores)) }
+            .sorted { $0.cpu > $1.cpu }
+            .prefix(count)
+            .filter { $0.cpu >= 0.005 }
+    }
 }
 
 /// Samples the Mac's load on every other clock tick, so new numbers reach the screen with the tick's own redraw.
@@ -39,7 +159,13 @@ final class SystemStatsService {
     private var cpuTicks: [UInt32]?
     private var netBytes: [String: (rx: UInt64, tx: UInt64)] = [:]
     private var netSampled: TimeInterval?
-    private var diskUsed: Double?
+    private var volumes: [VolumeUsage] = []
+    private var volumesTask: Task<Void, Never>?
+    private var mountObservers: [NSObjectProtocol] = []
+    private var diskBytes: (read: UInt64, write: UInt64)?
+    private let processes = ProcessSampler()
+    private var processesBusy = false
+    private var samples = 0
     private var diskTask: Task<Void, Never>?
     private var temperature: Double?
     private var temperatureTask: Task<Void, Never>?
@@ -65,8 +191,18 @@ final class SystemStatsService {
         _ = read()  // a baseline, so the first sample on the tick already has rates
         diskTask = Task {
             while !Task.isCancelled {
-                diskUsed = await Task.detached(priority: .utility) { Self.readDisk() }.value
+                readVolumesNow()
                 try? await Task.sleep(for: .seconds(60))
+            }
+        }
+        // A drive plugged in or ejected shows at once rather than at the next minute.
+        if mountObservers.isEmpty {
+            let center = NSWorkspace.shared.notificationCenter
+            for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification,
+                         NSWorkspace.didRenameVolumeNotification] {
+                mountObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.readVolumesNow() }
+                })
             }
         }
         temperatureTask = Task {
@@ -79,15 +215,28 @@ final class SystemStatsService {
 
     /// Called every 2 s from the clock tick.
     func sample() {
-        guard enabled, let stats = read(), stats != dash.stats else { return }
-        dash.stats = stats
+        guard enabled, let stats = read() else { return }
+        dash.history.append(stats)
+        if stats != dash.stats { dash.stats = stats }
+        samples += 1
+        // The busiest processes, every other sample while the system page shows: listing every process is the one
+        // costly read here, so it waits for someone to be looking.
+        if dash.page == .system, samples % 2 == 0, !processesBusy {
+            processesBusy = true
+            let sampler = processes
+            Task {
+                let top = await Task.detached(priority: .utility) { sampler.top(3) }.value
+                processesBusy = false
+                if top != dash.topProcesses { dash.topProcesses = top }
+            }
+        }
     }
 
     /// For `deskdash snapshot`: rates need two samples, so it takes them a second apart.
     func prime() async {
         apply(dash.config.stats)
         guard enabled else { return }
-        diskUsed = Self.readDisk()
+        volumes = Self.readVolumes()
         temperature = CPUTemperature.shared?.read()
         try? await Task.sleep(for: .seconds(1))
         sample()
@@ -124,15 +273,29 @@ final class SystemStatsService {
             download = Double(rx) / (now - last)
             upload = Double(tx) / (now - last)
         }
+        var diskRead: Double?, diskWrite: Double?
+        let io = Self.diskIOBytes()
+        if let last = netSampled, now > last, let before = diskBytes, io.read >= before.read, io.write >= before.write {
+            diskRead = Double(io.read - before.read) / (now - last)
+            diskWrite = Double(io.write - before.write) / (now - last)
+        }
+        diskBytes = io
         netBytes = bytes
         netSampled = now
+
+        var swap = xsw_usage()
+        var swapSize = MemoryLayout<xsw_usage>.size
+        sysctlbyname("vm.swapusage", &swap, &swapSize, nil, 0)
+        var loads = [Double](repeating: 0, count: 3)
+        getloadavg(&loads, 3)
 
         let pages = UInt64(vm.active_count) + UInt64(vm.wire_count) + UInt64(vm.compressor_page_count)
         return SystemStats(cpu: cpu, temperature: temperature, thermal: ProcessInfo.processInfo.thermalState,
                            memoryUsed: Double(pages) * pageSize,
                            memoryTotal: Double(ProcessInfo.processInfo.physicalMemory),
-                           pressure: SystemStats.Pressure(rawValue: level) ?? .normal, diskUsed: diskUsed,
-                           download: download, upload: upload)
+                           pressure: SystemStats.Pressure(rawValue: level) ?? .normal, volumes: volumes,
+                           download: download, upload: upload, diskRead: diskRead,
+                           diskWrite: diskWrite, swapUsed: Double(swap.xsu_used), load: loads[0])
     }
 
     // MARK: kernel counters
@@ -193,14 +356,57 @@ final class SystemStatsService {
         return out
     }
 
-    /// Free space as Finder counts it, purgeable files included, which is why it goes through CacheDelete.
-    nonisolated private static func readDisk() -> Double? {
-        guard let values = try? URL(fileURLWithPath: "/").resourceValues(
-                  forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]),
-              let total = values.volumeTotalCapacity, total > 0,
-              let free = values.volumeAvailableCapacityForImportantUsage
-        else { return nil }
-        return min(1, max(0, 1 - Double(free) / Double(total)))
+    private func readVolumesNow() {
+        guard enabled, volumesTask == nil else { return }
+        volumesTask = Task {
+            volumes = await Task.detached(priority: .utility) { Self.readVolumes() }.value
+            volumesTask = nil
+        }
+    }
+
+    /// The volumes Finder shows: local, browsable, not hidden (Recovery, Preboot) and not disk images; the startup
+    /// disk first, then the Mac's own, then attached ones, by name. Free space as Finder counts it, purgeable files
+    /// included, which goes through CacheDelete (6-40 ms a volume), so it runs once a minute, off the main thread, and
+    /// when a volume is mounted or ejected.
+    nonisolated private static func readVolumes() -> [VolumeUsage] {
+        let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeIsInternalKey, .volumeIsLocalKey, .volumeIsBrowsableKey,
+                                      .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey,
+                                      .volumeAvailableCapacityKey]
+        let session = DASessionCreate(kCFAllocatorDefault)
+        var out: [VolumeUsage] = []
+        for url in FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? [] {
+            guard let v = try? url.resourceValues(forKeys: Set(keys)), v.volumeIsLocal == true, v.volumeIsBrowsable != false,
+                  let total = v.volumeTotalCapacity, total > 0
+            else { continue }
+            if let session, let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL),
+               let description = DADiskCopyDescription(disk) as? [String: Any],
+               let kind = description[kDADiskDescriptionDeviceProtocolKey as String] as? String,
+               kind == "Disk Image" || kind == "Virtual Interface" { continue }
+            let free = v.volumeAvailableCapacityForImportantUsage.map(Double.init) ?? Double(v.volumeAvailableCapacity ?? 0)
+            out.append(VolumeUsage(name: v.volumeLocalizedName ?? url.lastPathComponent, path: url.path,
+                                   isInternal: v.volumeIsInternal ?? (url.path == "/"), total: Double(total), free: free))
+        }
+        func rank(_ v: VolumeUsage) -> Int { v.path == "/" ? 0 : v.isInternal ? 1 : 2 }
+        return out.sorted { (rank($0), $0.name) < (rank($1), $1.name) }
+    }
+
+    /// Bytes read and written since boot by every disk (the IOBlockStorageDriver statistics Activity Monitor's Disk tab
+    /// shows), from the I/O registry: no permission, well under a millisecond.
+    private static func diskIOBytes() -> (read: UInt64, write: UInt64) {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOBlockStorageDriver"), &iterator)
+                == KERN_SUCCESS else { return (0, 0) }
+        defer { IOObjectRelease(iterator) }
+        var read: UInt64 = 0, write: UInt64 = 0
+        while case let entry = IOIteratorNext(iterator), entry != 0 {
+            if let stats = IORegistryEntryCreateCFProperty(entry, "Statistics" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any] {
+                read += (stats["Bytes (Read)"] as? NSNumber)?.uint64Value ?? 0
+                write += (stats["Bytes (Write)"] as? NSNumber)?.uint64Value ?? 0
+            }
+            IOObjectRelease(entry)
+        }
+        return (read, write)
     }
 }
 
